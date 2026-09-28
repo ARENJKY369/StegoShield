@@ -69,6 +69,9 @@ StegoShield/
 - `eval.EvaluationRunner`: runtime corpus generation from clean PNG/BMP images,
   measured 10/25/50/100% LSB detection, appended-data and wrong-extension
   cases, false-positive measurement, console output, and UTF-8 table export.
+- `ui.MainFrame`: a four-screen AWT interface for Hide, Extract, Scan, and
+  Clean workflows, plus report export, batch scans, heatmaps, evaluation, and
+  a localhost timing-channel demonstration.
 
 ## Full README sections to be completed with the final implementation
 

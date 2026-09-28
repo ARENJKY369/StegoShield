@@ -44,6 +44,10 @@ StegoShield/
   iterations, a 16-byte salt, and a 12-byte IV. Output is
   `salt | IV | ciphertext-and-tag`; mutable password arrays and derived key
   bytes are cleared after use.
+- `image.LSBImageStego`: RGB-channel LSB embedding with a 32-bit length header,
+  PNG/BMP carrier validation, sequential or password-scattered placement, and
+  lossless PNG-only output.
+- `image.ImageMetrics`: RGB MSE, PSNR, and amplified visual difference images.
 
 ## Full README sections to be completed with the final implementation
 

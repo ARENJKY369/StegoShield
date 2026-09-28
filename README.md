@@ -58,6 +58,11 @@ StegoShield/
   trailing-data checks, file-signature checks, image/WAV LSB indicators,
   invisible-Unicode detection, PNG metadata sizing, batch scanning, UTF-8
   report export, and an AWT LSB heatmap canvas.
+- `sanitize.StegoCleaner`: a non-destructive cleaner that re-encodes images,
+  randomizes LSBs with SecureRandom, strips invisible Unicode, randomizes WAV
+  sample LSBs, and re-scans every output.
+- `decoy.DecoyMode`: fixed-size decoy/real AES-GCM containers with real data
+  scattered into random-looking padding; the final README documents its limits.
 
 ## Full README sections to be completed with the final implementation
 

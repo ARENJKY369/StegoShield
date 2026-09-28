@@ -63,6 +63,9 @@ StegoShield/
   sample LSBs, and re-scans every output.
 - `decoy.DecoyMode`: fixed-size decoy/real AES-GCM containers with real data
   scattered into random-looking padding; the final README documents its limits.
+- `network`: a localhost-only 50 ms/150 ms timing-channel simulation with
+  timeout-bound sockets, background receive callbacks, an inter-arrival
+  histogram, and bimodality/regularity analysis.
 
 ## Full README sections to be completed with the final implementation
 

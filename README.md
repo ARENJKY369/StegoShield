@@ -54,6 +54,10 @@ StegoShield/
   stripping of U+200B–U+200D, U+2060, and U+FEFF.
 - `eof`: PNG IEND-trailing-byte and ImageIO tEXt metadata payload fixtures for
   exercising scanner and sanitizer behaviour.
+- `analysis`: an explainable 0–100 risk scanner, extraction attempts, PNG/JPEG
+  trailing-data checks, file-signature checks, image/WAV LSB indicators,
+  invisible-Unicode detection, PNG metadata sizing, batch scanning, UTF-8
+  report export, and an AWT LSB heatmap canvas.
 
 ## Full README sections to be completed with the final implementation
 

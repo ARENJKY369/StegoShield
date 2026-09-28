@@ -48,6 +48,12 @@ StegoShield/
   PNG/BMP carrier validation, sequential or password-scattered placement, and
   lossless PNG-only output.
 - `image.ImageMetrics`: RGB MSE, PSNR, and amplified visual difference images.
+- `audio.LSBAudioStego`: 16-bit signed little-endian PCM WAV LSB embedding
+  while preserving the source AudioFormat on output.
+- `text.ZeroWidthStego`: U+200B/U+200C text embedding plus detection and safe
+  stripping of U+200B–U+200D, U+2060, and U+FEFF.
+- `eof`: PNG IEND-trailing-byte and ImageIO tEXt metadata payload fixtures for
+  exercising scanner and sanitizer behaviour.
 
 ## Full README sections to be completed with the final implementation
 

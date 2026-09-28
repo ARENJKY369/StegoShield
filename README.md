@@ -66,6 +66,9 @@ StegoShield/
 - `network`: a localhost-only 50 ms/150 ms timing-channel simulation with
   timeout-bound sockets, background receive callbacks, an inter-arrival
   histogram, and bimodality/regularity analysis.
+- `eval.EvaluationRunner`: runtime corpus generation from clean PNG/BMP images,
+  measured 10/25/50/100% LSB detection, appended-data and wrong-extension
+  cases, false-positive measurement, console output, and UTF-8 table export.
 
 ## Full README sections to be completed with the final implementation
 

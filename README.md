@@ -72,6 +72,9 @@ StegoShield/
 - `ui.MainFrame`: a four-screen AWT interface for Hide, Extract, Scan, and
   Clean workflows, plus report export, batch scans, heatmaps, evaluation, and
   a localhost timing-channel demonstration.
+- `test.StegoShieldSelfTest`: JDK-only, main-method integration tests for
+  authenticated image round trips, tamper rejection, capacity/JPEG validation,
+  sanitization, and scanner control cases.
 
 ## Full README sections to be completed with the final implementation
 

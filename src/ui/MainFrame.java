@@ -7,6 +7,7 @@ import analysis.ExtractionService;
 import analysis.FileSignature;
 import analysis.LsbHeatmap;
 import analysis.LsbHeatmapCanvas;
+import analysis.PayloadClassifier;
 import analysis.ReportExporter;
 import analysis.RiskLevel;
 import analysis.ScanReport;
@@ -76,6 +77,8 @@ public final class MainFrame extends Frame {
     private static final String EXTRACT_CARD = "extract";
     private static final String SCAN_CARD = "scan";
     private static final String CLEAN_CARD = "clean";
+    private static final String EXTRACTION_CLASSIFICATION_PLACEHOLDER =
+            "Payload classification appears after a successful, authenticated extraction.";
 
     private final CardLayout cards;
     private final Panel cardPanel;
@@ -101,10 +104,12 @@ public final class MainFrame extends Frame {
     private TextField extractSourceField;
     private TextField extractPassword;
     private TextArea extractResult;
+    private TextArea extractClassificationArea;
     private File extractSource;
 
     private TextField scanSourceField;
     private TextArea scanReportArea;
+    private TextArea scanClassificationArea;
     private Label riskLabel;
     private RiskBadge riskBadge;
     private LsbHeatmapCanvas heatmapCanvas;
@@ -275,10 +280,20 @@ public final class MainFrame extends Frame {
         controls.add(new Label("Reveal mode"));
         controls.add(extractMode);
         screen.add(controls, BorderLayout.NORTH);
-        extractResult = new TextArea("Extracted plaintext appears here after authentication succeeds.", 16, 90,
+        Panel center = new Panel(new BorderLayout(6, 6));
+        extractResult = new TextArea("Extracted plaintext appears here after authentication succeeds.", 13, 90,
                 TextArea.SCROLLBARS_BOTH);
         extractResult.setEditable(false);
-        screen.add(extractResult, BorderLayout.CENTER);
+        center.add(extractResult, BorderLayout.CENTER);
+        Panel classificationPanel = new Panel(new BorderLayout(0, 4));
+        classificationPanel.add(new Label("Payload Classification", Label.CENTER), BorderLayout.NORTH);
+        extractClassificationArea = new TextArea(
+                EXTRACTION_CLASSIFICATION_PLACEHOLDER, 10, 90,
+                TextArea.SCROLLBARS_BOTH);
+        extractClassificationArea.setEditable(false);
+        classificationPanel.add(extractClassificationArea, BorderLayout.CENTER);
+        center.add(classificationPanel, BorderLayout.SOUTH);
+        screen.add(center, BorderLayout.CENTER);
         Panel actions = new Panel();
         actions.add(navigationButton("Open carrier", this::chooseExtractCarrier));
         actions.add(navigationButton("Extract", this::beginExtract));
@@ -302,9 +317,20 @@ public final class MainFrame extends Frame {
         top.add(riskPanel);
         screen.add(top, BorderLayout.NORTH);
         Panel center = new Panel(new BorderLayout(6, 6));
+        Panel reportColumn = new Panel(new BorderLayout(0, 4));
         scanReportArea = new TextArea("Scanner findings appear here.", 18, 46, TextArea.SCROLLBARS_BOTH);
         scanReportArea.setEditable(false);
-        center.add(scanReportArea, BorderLayout.WEST);
+        reportColumn.add(scanReportArea, BorderLayout.CENTER);
+        Panel classificationPanel = new Panel(new BorderLayout(0, 4));
+        classificationPanel.add(new Label("Payload Classification (blind, no password)", Label.CENTER),
+                BorderLayout.NORTH);
+        scanClassificationArea = new TextArea(
+                "Blind structural classification of recoverable payload bytes appears here after a scan.",
+                9, 46, TextArea.SCROLLBARS_BOTH);
+        scanClassificationArea.setEditable(false);
+        classificationPanel.add(scanClassificationArea, BorderLayout.CENTER);
+        reportColumn.add(classificationPanel, BorderLayout.SOUTH);
+        center.add(reportColumn, BorderLayout.WEST);
         Panel visuals = new Panel(new GridLayout(2, 1, 6, 6));
         Panel heatPanel = new Panel(new BorderLayout(0, 4));
         heatPanel.add(new Label("LSB heatmap overlay on scanned image", Label.CENTER), BorderLayout.NORTH);
@@ -495,6 +521,7 @@ public final class MainFrame extends Frame {
         char[] password = extractPassword.getText().toCharArray();
         int mode = extractMode.getSelectedIndex();
         boolean scattered = extractPlacement.getSelectedIndex() == 1;
+        onEdt(() -> extractClassificationArea.setText(EXTRACTION_CLASSIFICATION_PLACEHOLDER));
         runAsync("extract", () -> {
             try {
                 byte[] raw = extractRawPayload(source, scattered, password);
@@ -511,9 +538,13 @@ public final class MainFrame extends Frame {
                         clear(decrypted);
                     }
                 }
-                String plaintext = decodeUtf8(message);
+                PayloadClassifier.Classification classification = PayloadClassifier.classifyAuthenticated(message);
+                String plaintext = displayText(message);
                 clear(message);
-                onEdt(() -> extractResult.setText(plaintext));
+                onEdt(() -> {
+                    extractResult.setText(plaintext);
+                    extractClassificationArea.setText(classification.toText());
+                });
                 appendStatus("Extraction and authenticated validation succeeded for " + source.getName() + ".");
             } catch (AEADBadTagException exception) {
                 appendStatus("Extraction failed: wrong password or tampered encrypted data.");
@@ -541,6 +572,7 @@ public final class MainFrame extends Frame {
             ScanReport report = scanner.scan(source);
             ScanVisual visual = buildScanVisual(source);
             GeneratedCarrier pair = lastGenerated;
+            PayloadClassifier.Classification payloadClassification = classifyRecoveredPayload(source, pair);
             latestReport = report;
             latestBatch = List.of();
             onEdt(() -> {
@@ -548,6 +580,7 @@ public final class MainFrame extends Frame {
                 setRiskLabel(report);
                 heatmapCanvas.setImageAndHeatmap(visual.image(), visual.heatmap());
                 showScanPreview(pair, source, visual);
+                scanClassificationArea.setText(payloadClassification.toText());
             });
             appendStatus("Completed scan: " + source.getName() + " scored " + report.riskScore() + "/100.");
         });
@@ -836,6 +869,40 @@ public final class MainFrame extends Frame {
             scanPreviewCanvas.setImages(pair.original(), pair.generated());
         } else {
             scanPreviewCanvas.setImages(null, scanned);
+        }
+    }
+
+    /**
+     * Runs the blind payload classification (Mode 1) on the bytes a
+     * best-effort extraction recovers from the scanned file. Bytes are
+     * reported by structural type only and are never labelled malware. When
+     * the scanned file is the stego image this session generated on the Hide
+     * screen, its embedded bytes are flagged as this app's own AES-GCM
+     * container and skipped.
+     */
+    private PayloadClassifier.Classification classifyRecoveredPayload(File source, GeneratedCarrier pair) {
+        boolean ownEncryptedPayload = pair != null
+                && pair.output().getAbsolutePath().equals(source.getAbsolutePath());
+        byte[] recovered = null;
+        ExtractionAttempt attempt = extractionService.attempt(source);
+        if (attempt.successful()) {
+            recovered = attempt.payload();
+        }
+        return PayloadClassifier.classifyBlind(recovered, ownEncryptedPayload);
+    }
+
+    /**
+     * Returns the UTF-8 rendering of an authenticated payload, or a neutral
+     * placeholder when the recovered plaintext is binary, so successful
+     * extraction of non-text payloads is reported rather than mislabelled as
+     * a failure.
+     */
+    private static String displayText(byte[] message) {
+        try {
+            return decodeUtf8(message);
+        } catch (IllegalArgumentException exception) {
+            return "(Authenticated payload of " + message.length
+                    + " byte(s) is not valid UTF-8 text; see Payload Classification below.)";
         }
     }
 

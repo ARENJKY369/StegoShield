@@ -915,10 +915,3 @@ public final class MainFrame extends Frame {
         void run() throws Exception;
     }
 }
-  }
-
-    @FunctionalInterface
-    private interface BackgroundTask {
-        void run() throws Exception;
-    }
-}

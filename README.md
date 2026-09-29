@@ -149,10 +149,10 @@ java -cp out test.StegoShieldSelfTest
 ### Evaluation command
 
 ```bash
-java -cp out eval.EvaluationRunner <clean-image-folder> [output-root]
+java -cp out eval.EvaluationRunner <clean-image-folder> [output-root] [sequential|scattered]
 ```
 
-The evaluation output directory must be outside the clean-image input folder so generated specimens cannot contaminate clean controls.
+The evaluation output directory must be outside the clean-image input folder so generated specimens cannot contaminate clean controls. The optional third argument selects LSB payload placement: `sequential` (default) or `scattered`, which password-scatters bits with a fixed public evaluation password the scanner never receives, mirroring a real scan where the password is unknown. Scattered placement is measurably harder to detect: on a 32-carrier corpus (10 photographs, 12 synthetic graphics including dithered gradients and flat colors, 10 noisy or high-ISO-style images), scattered LSB at 10% capacity flagged 25.0% versus 87.5% for sequential, and scattered LSB at 100% capacity flagged 87.5% because full coverage equalizes pairs regardless of placement order. Payloads are cryptographically random, so low-rate rows can move by one sample between runs. Run the evaluation against your own corpus for authoritative numbers.
 
 ## GUI usage
 
@@ -284,7 +284,7 @@ Scheduling jitter, TCP buffering, and operating-system load can affect the demon
 
 ## Limitations and scanner caveats
 
-- **Low embedding rates and password-scattered embedding reduce detection accuracy.** They may leave too little statistical evidence for the implemented image tests.
+- **Low embedding rates and password-scattered embedding reduce detection accuracy.** They may leave too little statistical evidence for the implemented image tests. Measured on the 32-carrier corpus above: scattered detection was 25.0% at 10% capacity and 34.4% at 50% capacity, versus 87.5% at every rate for sequential placement.
 - A high score is an indicator, not proof. Clean files can contain random-looking data, large metadata, compressed content, unusual extensions, or invisible Unicode for legitimate reasons.
 - A low score is not assurance. Novel, adaptive, encrypted, sparse, transform-domain, or format-specific techniques can evade these checks.
 - The scanner does not execute recovered files, identify malware families, inspect memory, or replace an antivirus, EDR, forensic workflow, or human review.
@@ -293,9 +293,10 @@ Scheduling jitter, TCP buffering, and operating-system load can affect the demon
 - Zero-width text can be destroyed by Unicode normalization, editors, chat platforms, copy/paste, fonts, or transport transformations.
 - The scanner fully loads files only up to its configured deep-analysis limit (64 MiB) and UTF-8 text only up to its text-analysis limit (8 MiB). Larger files still receive safe basic checks but not every deep heuristic.
 - Statistical tests are sensitive to source content, resizing, color processing, compression history, and sample size.
-- **Dithered, noisy, or sensor-like imagery can equalize adjacent value pairs naturally.** The chi-square equalized-prefix sweep can therefore raise clean but noisy images to SUSPICIOUS on its own; measured example: synthetic gradient-plus-noise images scored 25-43/100. Treat a sweep hit on noisy imagery as a prompt for review, not as evidence of hidden data.
+- **Dithered, noisy, or sensor-like imagery can equalize adjacent value pairs naturally.** The chi-square equalized-prefix sweep can therefore raise clean but noisy images to SUSPICIOUS on its own; on the 32-carrier corpus the clean false-positive rate was 21.9% overall: 20% for photographs, 0% for synthetic graphics, and 50% for noisy or pure-noise images. Treat a sweep hit on noisy imagery as a prompt for review, not as evidence of hidden data.
+- **Flat-color or posterized graphics with very few distinct values are statistically blind spots.** With too few active value pairs the chi-square test is skipped, and LSB balance alone scores 18, below the SUSPICIOUS threshold; measured example: 4 solid or banded synthetic carriers went undetected at every embedding rate in both placement modes.
 - Cleaning neutralizes only supported channels. It cannot prove removal of arbitrary steganography, malicious macros, parser exploits, encryption, or external references.
-- The password-scattered image permutation obscures placement; it is not a substitute for AES-GCM encryption.
+- The password-scattered image permutation obscures placement; it is not a substitute for AES-GCM encryption. Below full capacity it largely defeats the implemented statistical tests: at 10% scattered capacity only photographs with naturally balanced pairs were flagged, and several of those flags match the clean false-positive baseline rather than genuine payload detection.
 
 ## Assumptions
 
@@ -441,7 +442,7 @@ This inventory lists project classes and their public project-facing methods. Re
 ## Final quality gate
 
 - This tool is for privacy and defensive security on files you own or are authorized to analyze.
-- No detection-accuracy figures are claimed here because no evaluation corpus has been run in this environment.
+- Detection-accuracy figures quoted in this README come only from evaluation runs executed against the described 32-carrier corpus; they are environmental measurements, not guarantees, and should be re-measured for your own carriers.
 - The exact commands to compile and run are:
 
 ```bash

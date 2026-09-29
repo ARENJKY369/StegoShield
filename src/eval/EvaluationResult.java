@@ -19,9 +19,10 @@ public final class EvaluationResult {
     private final File outputDirectory;
     private final File reportFile;
     private final Instant completedAt;
+    private final boolean scatteredPlacement;
 
     EvaluationResult(Map<EvaluationScenario, EvaluationMetrics> metrics, List<String> warnings,
-            File outputDirectory, File reportFile, Instant completedAt) {
+            File outputDirectory, File reportFile, Instant completedAt, boolean scatteredPlacement) {
         Objects.requireNonNull(metrics, "metrics must not be null");
         EnumMap<EvaluationScenario, EvaluationMetrics> copy = new EnumMap<>(EvaluationScenario.class);
         copy.putAll(metrics);
@@ -30,6 +31,7 @@ public final class EvaluationResult {
         this.outputDirectory = Objects.requireNonNull(outputDirectory, "output directory must not be null");
         this.reportFile = Objects.requireNonNull(reportFile, "report file must not be null");
         this.completedAt = Objects.requireNonNull(completedAt, "completion time must not be null");
+        this.scatteredPlacement = scatteredPlacement;
     }
 
     /** @return immutable scenario metrics */
@@ -55,6 +57,11 @@ public final class EvaluationResult {
     /** @return runtime completion timestamp */
     public Instant completedAt() {
         return completedAt;
+    }
+
+    /** @return whether LSB payloads were placed password-scattered */
+    public boolean scatteredPlacement() {
+        return scatteredPlacement;
     }
 
     /**
@@ -84,7 +91,11 @@ public final class EvaluationResult {
         StringBuilder table = new StringBuilder();
         table.append("StegoShield runtime evaluation\n");
         table.append("Completed: ").append(completedAt).append("\n");
-        table.append("Output directory: ").append(outputDirectory.getAbsolutePath()).append("\n\n");
+        table.append("Output directory: ").append(outputDirectory.getAbsolutePath()).append("\n");
+        table.append("Embedding placement: ")
+                .append(scatteredPlacement ? "password-scattered (evaluation password never given to the scanner)"
+                        : "sequential")
+                .append("\n\n");
         table.append(String.format("%-34s %10s %10s %16s%n", "Scenario", "Samples", "Flagged", "Rate"));
         table.append("--------------------------------------------------------------------------\n");
         for (EvaluationScenario scenario : EvaluationScenario.values()) {
@@ -92,7 +103,8 @@ public final class EvaluationResult {
             if (metric == null) {
                 continue;
             }
-            table.append(String.format("%-34s %10d %10d %16s%n", scenario.displayName(), metric.total(),
+            table.append(String.format("%-34s %10d %10d %16s%n", scenario.displayName(scatteredPlacement),
+                    metric.total(),
                     metric.flagged(), metric.formattedPercent()));
         }
         table.append("\nOverall detection rate: ").append(format(overallDetectionPercent())).append("\n");

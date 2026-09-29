@@ -149,9 +149,10 @@ public final class StegoScanner {
                     report.add("Chi-square pair-of-values", AnalysisConstants.SCORE_CHI_SQUARE_SWEEP,
                             String.format(Locale.ROOT, "Chi-square prefix sweep: the first %.1f%% of "
                                     + "%s-channel samples (%d of %d) have adjacent value pairs consistent "
-                                    + "with equalization (z=%.3f at or below +%.1f), matching sequential "
-                                    + "LSB replacement of random-looking data; the global combined "
-                                    + "z-score is %.3f (df=%d).",
+                                    + "with equalization (z=%.3f at or below +%.1f). Sequential LSB "
+                                    + "replacement produces exactly this contiguous signature; scattered "
+                                    + "embedding or naturally noisy content can produce it too. The global "
+                                    + "combined z-score is %.3f (df=%d).",
                                     sweep.equalizedFraction() * 100.0d, sweep.channelName(),
                                     sweep.equalizedSamples(), sweep.channelSamples(), sweep.zScore(),
                                     AnalysisConstants.CHI_SQUARE_EQUALIZED_Z, chiSquare.zScore(),

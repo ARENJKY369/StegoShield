@@ -25,8 +25,9 @@ Many tools only hide data or only attempt detection. StegoShield brings together
 - 16-bit signed little-endian PCM WAV LSB hiding while preserving the `AudioFormat`.
 - Unicode zero-width text hiding with U+200B/U+200C, including detector and stripping support for U+200B–U+200D, U+2060, and U+FEFF.
 - PNG IEND-trailing-data and ImageIO `tEXt` metadata fixtures for realistic scanner exercises.
-- Explainable 0–100 risk scanner with file signatures, extension mismatches, carrier trailing data, entropy, embedded signatures, chi-square, LSB statistics, invisible Unicode, metadata sizing, and WAV LSB checks.
-- LSB heatmap, sorted background batch scan, UTF-8 report export, and payload extraction attempts.
+- Explainable 0–100 risk scanner with file signatures, extension mismatches, carrier trailing data, entropy, embedded signatures, chi-square, LSB statistics, invisible Unicode, metadata sizing, and WAV LSB checks. The measured pair-of-values chi-square z-score is always reported as its own Findings line for qualifying images, scoring points only when triggered.
+- LSB heatmap rendered as a semi-transparent per-block colour overlay on the scanned image itself, sorted background batch scan, UTF-8 report export, and payload extraction attempts.
+- Original/Stego/Difference preview panels (minimum 300x200) on the Hide and Scan screens, plus coloured CLEAN/SUSPICIOUS/LIKELY risk badges next to the risk scores on the Scan and Clean screens.
 - Non-destructive Stego Cleaner that randomizes—not zeroes—supported carrier LSBs and re-scans the output.
 - Fixed-size decoy/real dual-password mode with documented plausible-deniability limits.
 - Localhost-only timing-channel simulation and timing histogram/bimodality analysis.
@@ -166,7 +167,7 @@ Start the program with `java -cp out ui.MainFrame`.
 6. Optionally enable decoy mode, enter a distinct harmless decoy message and decoy password.
 7. Select a distinct output file and save.
 
-Image outputs are PNG even when a BMP source is selected. WAV output must remain supported 16-bit PCM WAV. Text output is UTF-8.
+Image outputs are PNG even when a BMP source is selected. WAV output must remain supported 16-bit PCM WAV. Text output is UTF-8. After hiding in an image carrier, the screen shows the original, generated, and amplified x20 difference panels side by side; each panel keeps a minimum size of 300x200 pixels.
 
 ### Extract
 
@@ -180,8 +181,8 @@ A standard extraction decrypts with AES-GCM, validates `Payload`, then strictly 
 ### Scan
 
 1. Open a file and choose **Scan file**.
-2. Read the risk label, score, and every triggered reason.
-3. For images, inspect the block-based LSB heatmap.
+2. Read the risk label, score, coloured CLEAN/SUSPICIOUS/LIKELY badge, and every triggered reason. Image reports always include their own chi-square pair-of-values z-score line, which scores points only when it triggers.
+3. For images, inspect the block-based LSB heatmap painted as a semi-transparent colour overlay on the scanned picture, warm and opaque marking near-even blocks. The preview panels below it show the scanned image, and — when the scanned file is the stego image most recently generated on the Hide screen in this session — its original carrier and amplified x20 difference too.
 4. Use **Batch folder** and select any file within the target folder; its parent folder is scanned recursively in a background worker.
 5. Use **Export report** to save a UTF-8 `.txt` single or batch report.
 
@@ -193,7 +194,7 @@ The **Timing demo** is a localhost-only controlled demonstration. It intentional
 2. Select a distinct destination.
 3. Choose **Clean and re-scan**.
 
-The Cleaner never modifies the original. It displays the applied strategy, original report, output report, and score difference. A lower score is useful feedback, not proof every possible channel was removed.
+The Cleaner never modifies the original. It displays the applied strategy, original report, output report, and score difference, with before/after risk scores and CLEAN/SUSPICIOUS/LIKELY badges at the top of the screen. A lower score is useful feedback, not proof every possible channel was removed.
 
 ### Evaluation
 
@@ -223,7 +224,7 @@ The final score is capped at 100. Thresholds and point values live in `analysis.
 | Oversized PNG textual metadata | 18 | textual metadata bytes/chunk size |
 | WAV LSB randomness | 18 | sample-LSB balance z-score |
 
-The chi-square implementation groups adjacent values such as 42/43, calculates expected values from each pair total, and uses one degree of freedom for every non-empty pair. It does not apply the test to tiny images or too few active pairs.
+The chi-square implementation groups adjacent values such as 42/43, calculates expected values from each pair total, and uses one degree of freedom for every non-empty pair. It does not apply the test to tiny images or too few active pairs. Every qualifying image scan reports the measured chi-square z-score as its own Findings line; the line contributes points only when the z-score is at or below the threshold.
 
 ## Sanitizer behavior
 
@@ -384,7 +385,7 @@ This inventory lists project classes and their public project-facing methods. Re
 - `LsbStatistics(totalBits, oneBits, balanceZ, blockCount, balancedBlockCount, meanOneFraction, oneFractionVariance)` — record component accessors, `oneFraction`, `balancedBlockFraction`.
 - `ImageStatistics` — `pairOfValuesChiSquare`, `lsbStatistics`, `balanceZ`.
 - `LsbHeatmap` — `fromImage`; nested `Heatmap(imageWidth, imageHeight, blockSize, columns, rows, intensities)` accessors and `intensityAt`.
-- `LsbHeatmapCanvas` — constructor, `setHeatmap`, `heatmap`, `paint`, `update`.
+- `LsbHeatmapCanvas` — constructor, `setHeatmap`, `setImageAndHeatmap`, `image`, `heatmap`, `paint`, `update`.
 - `ScanReport` — `file`, `fileSize`, `detectedSignature`, `riskScore`, `riskLevel`, `findings`, `scannedAt`, `toText`, `failure`.
 - `StegoScanner` — `scan`.
 - `ReportExporter` — `export`, `exportBatch`.
@@ -412,7 +413,8 @@ This inventory lists project classes and their public project-facing methods. Re
 - `EvaluationMetrics` — `scenario`, `total`, `flagged`, `flaggedPercent`, `formattedPercent`.
 - `EvaluationResult` — `metrics`, `warnings`, `outputDirectory`, `reportFile`, `completedAt`, `overallDetectionPercent`, `falsePositivePercent`, `toTable`.
 - `EvaluationRunner` — constructors, `run`, `main`.
-- `ImagePreviewCanvas` — constructor, `setImages`, `clear`, `paint`, `update`.
+- `ImagePreviewCanvas` — constructors `ImagePreviewCanvas()`, `ImagePreviewCanvas(String, String, String)`; `setImages`, `clear`, `paint`, `update`.
+- `RiskBadge` — constructor, `setLevel`, `level`, `paint`, `update`.
 - `MainFrame` — constructor, `main`.
 - `StegoShieldSelfTest` — `main`.
 

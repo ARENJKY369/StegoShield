@@ -33,6 +33,70 @@ public final class ImageStatistics {
                 histogram[rgb & 0xFF]++;
             }
         }
+        return pairOfValues(histogram);
+    }
+
+    /**
+     * Runs the classic Westfeld-Pfitzmann style prefix sweep on each color
+     * channel separately. Channel samples are consumed in raster order while
+     * a running value histogram is maintained; at every checkpoint the
+     * pair-of-values chi-square z-score of the current prefix is computed, and
+     * the largest prefix whose z-score is at or below the equalization
+     * threshold is recorded. Sequential LSB replacement of random-looking data
+     * equalizes adjacent pairs over exactly the embedded prefix, so a large
+     * equalized prefix indicates the technique and estimates its coverage.
+     *
+     * @param image image to analyze
+     * @param stepSamples positive checkpoint spacing in per-channel samples
+     * @param equalizedZ prefix z-scores at or below this count as equalized
+     * @return result for the channel with the largest equalized prefix, or the
+     *         most equalized channel when no prefix qualified
+     */
+    public static ChiSquareSweep pairOfValuesPrefixSweep(BufferedImage image, int stepSamples,
+            double equalizedZ) {
+        Objects.requireNonNull(image, "image must not be null");
+        if (stepSamples <= 0) {
+            throw new IllegalArgumentException("step samples must be positive");
+        }
+        if (!Double.isFinite(equalizedZ)) {
+            throw new IllegalArgumentException("equalized z must be finite");
+        }
+        String[] names = {"red", "green", "blue"};
+        ChiSquareSweep best = null;
+        for (int channel = 0; channel < names.length; channel++) {
+            int shift = 16 - 8 * channel;
+            long[] histogram = new long[256];
+            int channelSamples = image.getWidth() * image.getHeight();
+            int samples = 0;
+            int equalizedSamples = 0;
+            double zAtEqualized = Double.NaN;
+            for (int y = 0; y < image.getHeight(); y++) {
+                for (int x = 0; x < image.getWidth(); x++) {
+                    histogram[(image.getRGB(x, y) >>> shift) & 0xFF]++;
+                    samples++;
+                    if (samples % stepSamples == 0 || samples == channelSamples) {
+                        double zScore = pairOfValues(histogram).zScore();
+                        if (zScore <= equalizedZ) {
+                            equalizedSamples = samples;
+                            zAtEqualized = zScore;
+                        }
+                    }
+                }
+            }
+            double fullZ = pairOfValues(histogram).zScore();
+            double fraction = (double) equalizedSamples / channelSamples;
+            ChiSquareSweep candidate = new ChiSquareSweep(channel, names[channel], channelSamples,
+                    equalizedSamples, fraction, Double.isNaN(zAtEqualized) ? fullZ : zAtEqualized);
+            if (best == null || candidate.equalizedFraction() > best.equalizedFraction()
+                    || (candidate.equalizedFraction() == best.equalizedFraction()
+                            && candidate.zScore() < best.zScore())) {
+                best = candidate;
+            }
+        }
+        return best;
+    }
+
+    private static ChiSquareResult pairOfValues(long[] histogram) {
         double statistic = 0.0d;
         int degreesOfFreedom = 0;
         for (int value = 0; value < histogram.length; value += 2) {

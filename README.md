@@ -25,7 +25,7 @@ Many tools only hide data or only attempt detection. StegoShield brings together
 - 16-bit signed little-endian PCM WAV LSB hiding while preserving the `AudioFormat`.
 - Unicode zero-width text hiding with U+200B/U+200C, including detector and stripping support for U+200B–U+200D, U+2060, and U+FEFF.
 - PNG IEND-trailing-data and ImageIO `tEXt` metadata fixtures for realistic scanner exercises.
-- Explainable 0–100 risk scanner with file signatures, extension mismatches, carrier trailing data, entropy, embedded signatures, chi-square, LSB statistics, invisible Unicode, metadata sizing, and WAV LSB checks. The measured pair-of-values chi-square z-score is always reported as its own Findings line for qualifying images, scoring points only when triggered.
+- Explainable 0–100 risk scanner with file signatures, extension mismatches, carrier trailing data, entropy, embedded signatures, a per-channel chi-square equalized-prefix sweep (the classic pair-of-values attack, able to flag sequential LSB replacement independently), LSB statistics, invisible Unicode, metadata sizing, and WAV LSB checks. The measured pair-of-values chi-square z-score is always reported as its own Findings line for qualifying images.
 - LSB heatmap rendered as a semi-transparent per-block colour overlay on the scanned image itself, sorted background batch scan, UTF-8 report export, and payload extraction attempts.
 - Original/Stego/Difference preview panels (minimum 300x200) on the Hide and Scan screens, plus coloured CLEAN/SUSPICIOUS/LIKELY risk badges next to the risk scores on the Scan and Clean screens.
 - Non-destructive Stego Cleaner that randomizes—not zeroes—supported carrier LSBs and re-scans the output.
@@ -220,13 +220,16 @@ The final score is capped at 100. Thresholds and point values live in `analysis.
 | PNG IEND or JPEG FFD9 trailing bytes | 30 | Carrier boundary and trailing byte count |
 | Trailing entropy at least 7.5 bits/byte | 15 | Measured Shannon entropy |
 | ZIP, EXE/MZ, PDF, or ELF after carrier data | 35 each type | Type and offset after carrier boundary |
-| Pair-of-values chi-square | 18 | z-score and active degrees of freedom |
+| Chi-square equalized-prefix sweep | 25 | channel, equalized-prefix coverage and samples, prefix z-score, global z and df |
+| Pair-of-values chi-square global equalization | 18 | z-score and active degrees of freedom |
 | Image LSB global/block randomness | 18 | global z-score and balanced-block fraction |
 | Invisible Unicode | 35 | per-code-point counts |
 | Oversized PNG textual metadata | 18 | textual metadata bytes/chunk size |
 | WAV LSB randomness | 18 | sample-LSB balance z-score |
 
-The chi-square implementation groups adjacent values such as 42/43, calculates expected values from each pair total, and uses one degree of freedom for every non-empty pair. It does not apply the test to tiny images or too few active pairs. Every qualifying image scan reports the measured chi-square z-score as its own Findings line; the line contributes points only when the z-score is at or below the threshold.
+The chi-square implementation groups adjacent values such as 42/43, calculates expected values from each pair total, and uses one degree of freedom for every non-empty pair. It does not apply the test to tiny images or too few active pairs. Every qualifying image scan reports the measured chi-square z-score as its own Findings line.
+
+Two chi-square triggers contribute independently. The equalized-prefix sweep is the classic Westfeld-Pfitzmann style attack run per color channel: channel samples are consumed in raster order and the largest prefix whose adjacent-value pairs are statistically consistent with equalization (prefix z at or below +1.0, checkpoints every 256 samples) is recorded. Sequential LSB replacement of random-looking data equalizes pairs over exactly the embedded prefix, so the sweep both detects the technique and estimates its coverage; it scores when the equalized prefix covers at least 5% of a channel and at least 512 samples. The legacy global trigger (combined-RGB z at or below -3.0, indicating equalization beyond chance) is kept for small images below the sweep minimums.
 
 ## Payload classification
 
@@ -290,6 +293,7 @@ Scheduling jitter, TCP buffering, and operating-system load can affect the demon
 - Zero-width text can be destroyed by Unicode normalization, editors, chat platforms, copy/paste, fonts, or transport transformations.
 - The scanner fully loads files only up to its configured deep-analysis limit (64 MiB) and UTF-8 text only up to its text-analysis limit (8 MiB). Larger files still receive safe basic checks but not every deep heuristic.
 - Statistical tests are sensitive to source content, resizing, color processing, compression history, and sample size.
+- **Dithered, noisy, or sensor-like imagery can equalize adjacent value pairs naturally.** The chi-square equalized-prefix sweep can therefore raise clean but noisy images to SUSPICIOUS on its own; measured example: synthetic gradient-plus-noise images scored 25-43/100. Treat a sweep hit on noisy imagery as a prompt for review, not as evidence of hidden data.
 - Cleaning neutralizes only supported channels. It cannot prove removal of arbitrary steganography, malicious macros, parser exploits, encryption, or external references.
 - The password-scattered image permutation obscures placement; it is not a substitute for AES-GCM encryption.
 
@@ -396,8 +400,9 @@ This inventory lists project classes and their public project-facing methods. Re
 - `PayloadType` — `identify`, `displayName`.
 - `Entropy` — `shannonBitsPerByte`.
 - `ChiSquareResult(statistic, degreesOfFreedom, zScore)` — record component accessors.
+- `ChiSquareSweep(channelIndex, channelName, channelSamples, equalizedSamples, equalizedFraction, zScore)` — record component accessors.
 - `LsbStatistics(totalBits, oneBits, balanceZ, blockCount, balancedBlockCount, meanOneFraction, oneFractionVariance)` — record component accessors, `oneFraction`, `balancedBlockFraction`.
-- `ImageStatistics` — `pairOfValuesChiSquare`, `lsbStatistics`, `balanceZ`.
+- `ImageStatistics` — `pairOfValuesChiSquare`, `pairOfValuesPrefixSweep`, `lsbStatistics`, `balanceZ`.
 - `LsbHeatmap` — `fromImage`; nested `Heatmap(imageWidth, imageHeight, blockSize, columns, rows, intensities)` accessors and `intensityAt`.
 - `LsbHeatmapCanvas` — constructor, `setHeatmap`, `setImageAndHeatmap`, `image`, `heatmap`, `paint`, `update`.
 - `ScanReport` — `file`, `fileSize`, `detectedSignature`, `riskScore`, `riskLevel`, `findings`, `scannedAt`, `toText`, `failure`.

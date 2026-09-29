@@ -18,6 +18,14 @@ public final class AnalysisConstants {
     public static final int MIN_CHI_SQUARE_DEGREES_OF_FREEDOM = 8;
     /** Negative chi-square z-score at or below this implies unusually equal pairs. */
     public static final double CHI_SQUARE_SUSPICIOUS_Z = -3.0d;
+    /** Prefix chi-square z-score at or below this is consistent with equalized pairs. */
+    public static final double CHI_SQUARE_EQUALIZED_Z = 1.0d;
+    /** Samples between checkpoints of the per-channel chi-square prefix sweep. */
+    public static final int CHI_SQUARE_SWEEP_STEP_SAMPLES = 256;
+    /** Minimum equalized-prefix samples per channel before the sweep can score. */
+    public static final int CHI_SQUARE_SWEEP_MIN_PREFIX_SAMPLES = 512;
+    /** Minimum equalized-prefix fraction of a channel before the sweep can score. */
+    public static final double CHI_SQUARE_SWEEP_MIN_FRACTION = 0.05d;
     /** Absolute global LSB balance z-score considered unusually close to one-half. */
     public static final double LSB_BALANCE_Z_LIMIT = 2.0d;
     /** Side length in pixels for image LSB block statistics and heatmaps. */
@@ -47,6 +55,8 @@ public final class AnalysisConstants {
     public static final int SCORE_EMBEDDED_SIGNATURE = 35;
     /** Score for a suspicious low chi-square pair-of-values z-score. */
     public static final int SCORE_CHI_SQUARE = 18;
+    /** Score for a chi-square equalized-prefix sweep hit, strong enough to flag alone. */
+    public static final int SCORE_CHI_SQUARE_SWEEP = 25;
     /** Score for global and block-wise image LSB randomness indicators together. */
     public static final int SCORE_IMAGE_LSB_RANDOMNESS = 18;
     /** Score for monitored invisible Unicode characters. */

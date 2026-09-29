@@ -17,6 +17,7 @@ import java.security.SecureRandom;
 import java.util.Arrays;
 import java.util.Comparator;
 import javax.crypto.AEADBadTagException;
+import javax.imageio.ImageIO;
 import sanitize.StegoCleaner;
 
 /**
@@ -41,6 +42,7 @@ public final class StegoShieldSelfTest {
         try {
             temporaryDirectory = Files.createTempDirectory("stegoshield-self-test-");
             testImageHideExtractRoundTrip();
+            testImageFileRoundTrips(temporaryDirectory);
             testWrongPassword();
             testOversizePayload();
             testJpegOutputRejection(temporaryDirectory);
@@ -88,6 +90,46 @@ public final class StegoShieldSelfTest {
             clear(decrypted);
             clear(message);
         }
+    }
+
+    private static void testImageFileRoundTrips(Path directory) throws Exception {
+        BufferedImage carrier = patternedCarrier(128, 128);
+        File carrierFile = directory.resolve("workflow-carrier.png").toFile();
+        File sequentialFile = directory.resolve("workflow-sequential.png").toFile();
+        File scatteredFile = directory.resolve("workflow-scattered.png").toFile();
+        LSBImageStego.writePng(carrier, carrierFile);
+        String message = "GUI workflow encrypted round-trip";
+        for (boolean scattered : new boolean[] {false, true}) {
+            byte[] encrypted = null;
+            try {
+                encrypted = CryptoUtil.encrypt(Payload.wrap(message.getBytes(StandardCharsets.UTF_8)),
+                        "workflow-password".toCharArray());
+                BufferedImage loaded = LSBImageStego.readCarrier(carrierFile);
+                File output = scattered ? scatteredFile : sequentialFile;
+                try (LSBImageStego stego = scattered
+                        ? LSBImageStego.passwordScattered("workflow-password".toCharArray())
+                        : LSBImageStego.sequential()) {
+                    require(encrypted.length <= stego.capacityBytes(loaded), "encrypted workflow payload exceeds capacity");
+                    BufferedImage embedded = stego.embed(loaded, encrypted);
+                    File actual = LSBImageStego.writePng(embedded, output);
+                    require(actual.isFile(), "generated workflow PNG was not saved");
+                    BufferedImage reloaded = LSBImageStego.readCarrier(actual);
+                    byte[] extracted = stego.extract(reloaded);
+                    byte[] decrypted = CryptoUtil.decrypt(extracted, "workflow-password".toCharArray());
+                    byte[] recovered = Payload.unwrap(decrypted);
+                    require(message.equals(new String(recovered, StandardCharsets.UTF_8)),
+                            "image file workflow round-trip changed the message");
+                    clear(extracted);
+                    clear(decrypted);
+                    clear(recovered);
+                }
+            } finally {
+                clear(encrypted);
+            }
+        }
+        require(ImageIO.read(sequentialFile) != null && ImageIO.read(scatteredFile) != null,
+                "saved workflow outputs could not be reloaded");
+        System.out.println("PASS: sequential and password-scattered PNG workflow round trips");
     }
 
     private static void testWrongPassword() throws GeneralSecurityException {

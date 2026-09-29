@@ -138,12 +138,18 @@ public final class StegoScanner {
                 return;
             }
             ChiSquareResult chiSquare = ImageStatistics.pairOfValuesChiSquare(image);
-            if (chiSquare.degreesOfFreedom() >= AnalysisConstants.MIN_CHI_SQUARE_DEGREES_OF_FREEDOM
-                    && chiSquare.zScore() <= AnalysisConstants.CHI_SQUARE_SUSPICIOUS_Z) {
-                report.add("Chi-square pair-of-values", AnalysisConstants.SCORE_CHI_SQUARE,
-                        String.format(Locale.ROOT, "Chi-square z-score %.3f (df=%d) is at or below %.1f; "
-                                + "adjacent RGB value pairs are unusually equalized.", chiSquare.zScore(),
-                                chiSquare.degreesOfFreedom(), AnalysisConstants.CHI_SQUARE_SUSPICIOUS_Z));
+            if (chiSquare.degreesOfFreedom() >= AnalysisConstants.MIN_CHI_SQUARE_DEGREES_OF_FREEDOM) {
+                if (chiSquare.zScore() <= AnalysisConstants.CHI_SQUARE_SUSPICIOUS_Z) {
+                    report.add("Chi-square pair-of-values", AnalysisConstants.SCORE_CHI_SQUARE,
+                            String.format(Locale.ROOT, "Chi-square z-score %.3f (df=%d) is at or below %.1f; "
+                                    + "adjacent RGB value pairs are unusually equalized.", chiSquare.zScore(),
+                                    chiSquare.degreesOfFreedom(), AnalysisConstants.CHI_SQUARE_SUSPICIOUS_Z));
+                } else {
+                    report.add("Chi-square pair-of-values", 0,
+                            String.format(Locale.ROOT, "Chi-square z-score %.3f (df=%d) is above %.1f; "
+                                    + "adjacent RGB value pairs are not unusually equalized.", chiSquare.zScore(),
+                                    chiSquare.degreesOfFreedom(), AnalysisConstants.CHI_SQUARE_SUSPICIOUS_Z));
+                }
             }
             LsbStatistics lsb = ImageStatistics.lsbStatistics(image, AnalysisConstants.IMAGE_LSB_BLOCK_SIZE);
             if (Math.abs(lsb.balanceZ()) <= AnalysisConstants.LSB_BALANCE_Z_LIMIT

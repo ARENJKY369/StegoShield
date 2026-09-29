@@ -106,8 +106,11 @@ public final class MainFrame extends Frame {
     private TextArea scanReportArea;
     private Label riskLabel;
     private LsbHeatmapCanvas heatmapCanvas;
+    private ImagePreviewCanvas scanPreviewCanvas;
     private transient ScanReport latestReport;
     private transient List<ScanReport> latestBatch;
+    /** Last image pair generated on the Hide screen, for Scan-screen comparison. */
+    private transient GeneratedCarrier lastGenerated;
 
     private TextField cleanSourceField;
     private TextArea cleanResultArea;
@@ -288,12 +291,22 @@ public final class MainFrame extends Frame {
         top.add(new Label("Explainable risk"));
         top.add(riskLabel);
         screen.add(top, BorderLayout.NORTH);
-        Panel center = new Panel(new GridLayout(1, 2, 6, 6));
-        scanReportArea = new TextArea("Scanner findings appear here.", 18, 56, TextArea.SCROLLBARS_BOTH);
+        Panel center = new Panel(new BorderLayout(6, 6));
+        scanReportArea = new TextArea("Scanner findings appear here.", 18, 46, TextArea.SCROLLBARS_BOTH);
         scanReportArea.setEditable(false);
-        center.add(scanReportArea);
+        center.add(scanReportArea, BorderLayout.WEST);
+        Panel visuals = new Panel(new GridLayout(2, 1, 6, 6));
+        Panel heatPanel = new Panel(new BorderLayout(0, 4));
+        heatPanel.add(new Label("LSB heatmap overlay on scanned image", Label.CENTER), BorderLayout.NORTH);
         heatmapCanvas = new LsbHeatmapCanvas();
-        center.add(heatmapCanvas);
+        heatPanel.add(heatmapCanvas, BorderLayout.CENTER);
+        visuals.add(heatPanel);
+        Panel previewPanel = new Panel(new BorderLayout(0, 4));
+        previewPanel.add(new Label("Original / scanned / amplified difference", Label.CENTER), BorderLayout.NORTH);
+        scanPreviewCanvas = new ImagePreviewCanvas("ORIGINAL", "SCANNED IMAGE", "DIFFERENCE x20");
+        previewPanel.add(scanPreviewCanvas, BorderLayout.CENTER);
+        visuals.add(previewPanel);
+        center.add(visuals, BorderLayout.CENTER);
         screen.add(center, BorderLayout.CENTER);
         Panel actions = new Panel();
         actions.add(navigationButton("Open file", this::chooseScanFile));
@@ -426,6 +439,9 @@ public final class MainFrame extends Frame {
                     if (hidden.original != null) {
                         previewCanvas.setImages(hidden.original, hidden.generated);
                     }
+                    if (hidden.original != null && hidden.generated != null) {
+                        lastGenerated = new GeneratedCarrier(hidden.output, hidden.original, hidden.generated);
+                    }
                 });
             } finally {
                 clear(payload);
@@ -498,12 +514,14 @@ public final class MainFrame extends Frame {
         runAsync("scan", () -> {
             ScanReport report = scanner.scan(source);
             ScanVisual visual = buildScanVisual(source);
+            GeneratedCarrier pair = lastGenerated;
             latestReport = report;
             latestBatch = List.of();
             onEdt(() -> {
                 scanReportArea.setText(report.toText());
                 setRiskLabel(report);
                 heatmapCanvas.setImageAndHeatmap(visual.image(), visual.heatmap());
+                showScanPreview(pair, source, visual);
             });
             appendStatus("Completed scan: " + source.getName() + " scored " + report.riskScore() + "/100.");
         });
@@ -773,6 +791,28 @@ public final class MainFrame extends Frame {
         }
     }
 
+    /**
+     * Shows the scanned image in the Scan screen preview panels. When the
+     * scanned file is the stego image most recently generated on the Hide
+     * screen, its original carrier and amplified difference are shown as
+     * well, giving the full ORIGINAL / SCANNED / DIFFERENCE comparison.
+     */
+    private void showScanPreview(GeneratedCarrier pair, File source, ScanVisual visual) {
+        BufferedImage scanned = visual.image();
+        if (scanned == null) {
+            scanPreviewCanvas.clear();
+            return;
+        }
+        boolean pairedWithSessionOutput = pair != null && pair.original() != null
+                && pair.generated() != null
+                && pair.output().getAbsolutePath().equals(source.getAbsolutePath());
+        if (pairedWithSessionOutput) {
+            scanPreviewCanvas.setImages(pair.original(), pair.generated());
+        } else {
+            scanPreviewCanvas.setImages(null, scanned);
+        }
+    }
+
     private FileSignature detectSignature(File source) throws IOException {
         try (java.io.InputStream input = Files.newInputStream(source.toPath())) {
             return FileSignature.detect(input.readNBytes(16));
@@ -908,6 +948,9 @@ public final class MainFrame extends Frame {
     }
 
     private record ScanVisual(BufferedImage image, LsbHeatmap.Heatmap heatmap) {
+    }
+
+    private record GeneratedCarrier(File output, BufferedImage original, BufferedImage generated) {
     }
 
     private record HiddenOutput(File output, BufferedImage original, BufferedImage generated, String metrics) {

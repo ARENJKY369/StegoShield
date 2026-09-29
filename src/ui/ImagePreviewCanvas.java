@@ -15,8 +15,9 @@ import java.awt.image.BufferedImage;
 public final class ImagePreviewCanvas extends Canvas {
     private static final long serialVersionUID = 1L;
 
-    private BufferedImage original;
-    private BufferedImage generated;
+    private transient BufferedImage original;
+    private transient BufferedImage generated;
+    private transient BufferedImage difference;
 
     /** Creates a blank preview canvas. */
     public ImagePreviewCanvas() {
@@ -33,6 +34,8 @@ public final class ImagePreviewCanvas extends Canvas {
     public void setImages(BufferedImage original, BufferedImage generated) {
         this.original = original;
         this.generated = generated;
+        this.difference = original != null && generated != null
+                ? image.ImageMetrics.amplifiedDifference(original, generated, 20.0d) : null;
         repaint();
     }
 
@@ -48,10 +51,12 @@ public final class ImagePreviewCanvas extends Canvas {
         int height = getHeight();
         graphics.setColor(getBackground());
         graphics.fillRect(0, 0, width, height);
-        int gap = 14;
-        int halfWidth = Math.max(1, (width - gap) / 2);
-        drawSlot(graphics, original, 0, 0, halfWidth, height, "Original");
-        drawSlot(graphics, generated, halfWidth + gap, 0, width - halfWidth - gap, height, "Generated");
+        int gap = 10;
+        int slotWidth = Math.max(1, (width - 2 * gap) / 3);
+        drawSlot(graphics, original, 0, 0, slotWidth, height, "ORIGINAL");
+        drawSlot(graphics, generated, slotWidth + gap, 0, slotWidth, height, "STEGO IMAGE");
+        drawSlot(graphics, difference, 2 * (slotWidth + gap), 0, width - 2 * (slotWidth + gap), height,
+                "DIFFERENCE x20");
     }
 
     /** Avoids background flicker. */

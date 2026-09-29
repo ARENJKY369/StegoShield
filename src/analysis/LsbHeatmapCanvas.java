@@ -15,7 +15,7 @@ import java.util.Objects;
 public final class LsbHeatmapCanvas extends Canvas {
     private static final long serialVersionUID = 1L;
 
-    private LsbHeatmap.Heatmap heatmap;
+    private transient LsbHeatmap.Heatmap heatmap;
 
     /**
      * Creates an empty heatmap canvas with a practical preview size.

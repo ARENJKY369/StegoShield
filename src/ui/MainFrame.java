@@ -79,9 +79,9 @@ public final class MainFrame extends Frame {
     private final CardLayout cards;
     private final Panel cardPanel;
     private final TextArea statusArea;
-    private final StegoScanner scanner;
-    private final StegoCleaner cleaner;
-    private final ExtractionService extractionService;
+    private final transient StegoScanner scanner;
+    private final transient StegoCleaner cleaner;
+    private final transient ExtractionService extractionService;
 
     private Choice hideKind;
     private Choice hidePlacement;
@@ -106,8 +106,8 @@ public final class MainFrame extends Frame {
     private TextArea scanReportArea;
     private Label riskLabel;
     private LsbHeatmapCanvas heatmapCanvas;
-    private ScanReport latestReport;
-    private List<ScanReport> latestBatch;
+    private transient ScanReport latestReport;
+    private transient List<ScanReport> latestBatch;
 
     private TextField cleanSourceField;
     private TextArea cleanResultArea;
@@ -136,6 +136,10 @@ public final class MainFrame extends Frame {
                 100, TextArea.SCROLLBARS_VERTICAL_ONLY);
         statusArea.setEditable(false);
         add(statusArea, BorderLayout.SOUTH);
+        Theme.apply(this);
+        statusArea.setBackground(Theme.TERMINAL);
+        statusArea.setForeground(Theme.SUCCESS);
+        statusArea.setRows(6);
 
         addWindowListener(new WindowAdapter() {
             @Override
@@ -162,12 +166,21 @@ public final class MainFrame extends Frame {
     }
 
     private Panel buildNavigation() {
-        Panel navigation = new Panel();
-        navigation.add(navigationButton("Hide", () -> cards.show(cardPanel, HIDE_CARD)));
-        navigation.add(navigationButton("Extract", () -> cards.show(cardPanel, EXTRACT_CARD)));
-        navigation.add(navigationButton("Scan", () -> cards.show(cardPanel, SCAN_CARD)));
-        navigation.add(navigationButton("Clean", () -> cards.show(cardPanel, CLEAN_CARD)));
-        navigation.add(navigationButton("Evaluation", this::beginEvaluation));
+        Panel navigation = new Panel(new BorderLayout(16, 0));
+        navigation.setBackground(Theme.BACKGROUND);
+        navigation.add(Theme.brand("STEGOSHIELD"), BorderLayout.WEST);
+        Panel tabs = new Panel();
+        tabs.setBackground(Theme.BACKGROUND);
+        tabs.add(navigationButton("HIDE", () -> cards.show(cardPanel, HIDE_CARD)));
+        tabs.add(navigationButton("EXTRACT", () -> cards.show(cardPanel, EXTRACT_CARD)));
+        tabs.add(navigationButton("SCAN", () -> cards.show(cardPanel, SCAN_CARD)));
+        tabs.add(navigationButton("CLEAN", () -> cards.show(cardPanel, CLEAN_CARD)));
+        tabs.add(navigationButton("EVALUATION", this::beginEvaluation));
+        navigation.add(tabs, BorderLayout.CENTER);
+        Label status = new Label("OFFLINE  |  AES-256-GCM  |  JDK ONLY");
+        status.setForeground(Theme.MUTED);
+        status.setBackground(Theme.BACKGROUND);
+        navigation.add(status, BorderLayout.EAST);
         return navigation;
     }
 
@@ -361,6 +374,10 @@ public final class MainFrame extends Frame {
         }
         File output = chooseFile("Save generated carrier", FileDialog.SAVE, defaultOutputName(selectedHideKind()));
         if (output == null) {
+            return;
+        }
+        if (sameFile(source, output)) {
+            appendStatus("Output must be different from the carrier; the original is never overwritten.");
             return;
         }
         CarrierKind kind = selectedHideKind();
@@ -584,6 +601,10 @@ public final class MainFrame extends Frame {
         if (output == null) {
             return;
         }
+        if (sameFile(source, output)) {
+            appendStatus("Sanitized output must be a distinct file.");
+            return;
+        }
         runAsync("clean", () -> {
             SanitizationResult result = cleaner.clean(source, output);
             onEdt(() -> {
@@ -768,6 +789,14 @@ public final class MainFrame extends Frame {
         return new File(directory, name);
     }
 
+    private static boolean sameFile(File first, File second) {
+        try {
+            return first.getCanonicalFile().equals(second.getCanonicalFile());
+        } catch (IOException exception) {
+            return first.getAbsoluteFile().equals(second.getAbsoluteFile());
+        }
+    }
+
     private static TextField lockedField() {
         TextField field = new TextField();
         field.setEditable(false);
@@ -856,6 +885,13 @@ public final class MainFrame extends Frame {
 
     private record HiddenOutput(File output, BufferedImage original, BufferedImage generated, String metrics) {
     }
+
+    @FunctionalInterface
+    private interface BackgroundTask {
+        void run() throws Exception;
+    }
+}
+  }
 
     @FunctionalInterface
     private interface BackgroundTask {

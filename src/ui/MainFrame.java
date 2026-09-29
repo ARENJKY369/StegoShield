@@ -8,6 +8,7 @@ import analysis.FileSignature;
 import analysis.LsbHeatmap;
 import analysis.LsbHeatmapCanvas;
 import analysis.ReportExporter;
+import analysis.RiskLevel;
 import analysis.ScanReport;
 import analysis.StegoScanner;
 import audio.LSBAudioStego;
@@ -105,6 +106,7 @@ public final class MainFrame extends Frame {
     private TextField scanSourceField;
     private TextArea scanReportArea;
     private Label riskLabel;
+    private RiskBadge riskBadge;
     private LsbHeatmapCanvas heatmapCanvas;
     private ImagePreviewCanvas scanPreviewCanvas;
     private transient ScanReport latestReport;
@@ -114,6 +116,10 @@ public final class MainFrame extends Frame {
 
     private TextField cleanSourceField;
     private TextArea cleanResultArea;
+    private Label cleanRiskBeforeLabel;
+    private Label cleanRiskAfterLabel;
+    private RiskBadge cleanRiskBeforeBadge;
+    private RiskBadge cleanRiskAfterBadge;
     private File cleanSource;
 
     /**
@@ -286,10 +292,14 @@ public final class MainFrame extends Frame {
         scanSourceField = lockedField();
         riskLabel = new Label("Risk: no file scanned", Label.CENTER);
         riskLabel.setBackground(Color.LIGHT_GRAY);
+        riskBadge = new RiskBadge();
+        Panel riskPanel = new Panel(new BorderLayout(8, 0));
+        riskPanel.add(riskLabel, BorderLayout.CENTER);
+        riskPanel.add(riskBadge, BorderLayout.EAST);
         top.add(new Label("File to scan"));
         top.add(scanSourceField);
         top.add(new Label("Explainable risk"));
-        top.add(riskLabel);
+        top.add(riskPanel);
         screen.add(top, BorderLayout.NORTH);
         Panel center = new Panel(new BorderLayout(6, 6));
         scanReportArea = new TextArea("Scanner findings appear here.", 18, 46, TextArea.SCROLLBARS_BOTH);
@@ -322,10 +332,26 @@ public final class MainFrame extends Frame {
         Panel screen = new Panel(new BorderLayout(6, 6));
         Panel top = new Panel(new GridLayout(0, 2, 6, 6));
         cleanSourceField = lockedField();
+        cleanRiskBeforeLabel = new Label("Risk: not cleaned yet", Label.CENTER);
+        cleanRiskBeforeLabel.setBackground(Color.LIGHT_GRAY);
+        cleanRiskBeforeBadge = new RiskBadge();
+        Panel beforePanel = new Panel(new BorderLayout(8, 0));
+        beforePanel.add(cleanRiskBeforeLabel, BorderLayout.CENTER);
+        beforePanel.add(cleanRiskBeforeBadge, BorderLayout.EAST);
+        cleanRiskAfterLabel = new Label("Risk: not cleaned yet", Label.CENTER);
+        cleanRiskAfterLabel.setBackground(Color.LIGHT_GRAY);
+        cleanRiskAfterBadge = new RiskBadge();
+        Panel afterPanel = new Panel(new BorderLayout(8, 0));
+        afterPanel.add(cleanRiskAfterLabel, BorderLayout.CENTER);
+        afterPanel.add(cleanRiskAfterBadge, BorderLayout.EAST);
         top.add(new Label("File to sanitize"));
         top.add(cleanSourceField);
         top.add(new Label("Guarantee"));
         top.add(new Label("A distinct output is required; originals are never modified."));
+        top.add(new Label("Risk before cleaning"));
+        top.add(beforePanel);
+        top.add(new Label("Risk after cleaning"));
+        top.add(afterPanel);
         screen.add(top, BorderLayout.NORTH);
         cleanResultArea = new TextArea("Cleaning will display source and output scores here.", 16, 90,
                 TextArea.SCROLLBARS_BOTH);
@@ -653,7 +679,7 @@ public final class MainFrame extends Frame {
                 cleanResultArea.setText("Strategy: " + result.strategy() + "\n\nBefore:\n"
                         + result.before().toText() + "\nAfter:\n" + result.after().toText()
                         + "\nScore reduction: " + result.scoreReduction());
-                setRiskLabel(result.after());
+                setCleanRisk(result.before(), result.after());
             });
             appendStatus("Sanitized copy saved to " + result.output().getAbsolutePath() + "; score change: "
                     + result.scoreReduction());
@@ -832,11 +858,25 @@ public final class MainFrame extends Frame {
 
     private void setRiskLabel(ScanReport report) {
         riskLabel.setText("Risk: " + report.riskScore() + "/100 — " + report.riskLevel().displayName());
-        riskLabel.setBackground(switch (report.riskLevel()) {
+        riskLabel.setBackground(riskLabelColor(report.riskLevel()));
+        riskBadge.setLevel(report.riskLevel());
+    }
+
+    private void setCleanRisk(ScanReport before, ScanReport after) {
+        cleanRiskBeforeLabel.setText("Risk: " + before.riskScore() + "/100 — " + before.riskLevel().displayName());
+        cleanRiskBeforeLabel.setBackground(riskLabelColor(before.riskLevel()));
+        cleanRiskBeforeBadge.setLevel(before.riskLevel());
+        cleanRiskAfterLabel.setText("Risk: " + after.riskScore() + "/100 — " + after.riskLevel().displayName());
+        cleanRiskAfterLabel.setBackground(riskLabelColor(after.riskLevel()));
+        cleanRiskAfterBadge.setLevel(after.riskLevel());
+    }
+
+    private static Color riskLabelColor(RiskLevel level) {
+        return switch (level) {
             case CLEAN -> new Color(132, 205, 132);
             case SUSPICIOUS -> new Color(255, 200, 95);
             case LIKELY_CONTAINS_HIDDEN_DATA -> new Color(236, 122, 122);
-        });
+        };
     }
 
     private File chooseFile(String title, int mode, String defaultName) {

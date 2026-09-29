@@ -497,13 +497,13 @@ public final class MainFrame extends Frame {
         File source = new File(selectedPath);
         runAsync("scan", () -> {
             ScanReport report = scanner.scan(source);
-            LsbHeatmap.Heatmap heatmap = buildHeatmap(source);
+            ScanVisual visual = buildScanVisual(source);
             latestReport = report;
             latestBatch = List.of();
             onEdt(() -> {
                 scanReportArea.setText(report.toText());
                 setRiskLabel(report);
-                heatmapCanvas.setHeatmap(heatmap);
+                heatmapCanvas.setImageAndHeatmap(visual.image(), visual.heatmap());
             });
             appendStatus("Completed scan: " + source.getName() + " scored " + report.riskScore() + "/100.");
         });
@@ -764,12 +764,12 @@ public final class MainFrame extends Frame {
         return new ZeroWidthStego().extract(text);
     }
 
-    private LsbHeatmap.Heatmap buildHeatmap(File source) {
+    private ScanVisual buildScanVisual(File source) {
         try {
             BufferedImage image = LSBImageStego.readCarrier(source);
-            return LsbHeatmap.fromImage(image, AnalysisConstants.IMAGE_LSB_BLOCK_SIZE);
+            return new ScanVisual(image, LsbHeatmap.fromImage(image, AnalysisConstants.IMAGE_LSB_BLOCK_SIZE));
         } catch (IOException | IllegalArgumentException exception) {
-            return null;
+            return new ScanVisual(null, null);
         }
     }
 
@@ -905,6 +905,9 @@ public final class MainFrame extends Frame {
     }
 
     private record CapacityPreview(long capacity, BufferedImage image) {
+    }
+
+    private record ScanVisual(BufferedImage image, LsbHeatmap.Heatmap heatmap) {
     }
 
     private record HiddenOutput(File output, BufferedImage original, BufferedImage generated, String metrics) {

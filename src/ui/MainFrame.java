@@ -363,13 +363,26 @@ public final class MainFrame extends Frame {
         }
         String message = hideMessage.getText();
         if (message.isEmpty()) {
-            appendStatus("Secret message must not be empty.");
+            appendStatus("[error] Secret message must not be empty.");
+            return;
+        }
+        String passwordText = hidePassword.getText();
+        if (passwordText.isEmpty()) {
+            appendStatus("[error] Encryption password must not be empty.");
             return;
         }
         boolean useDecoy = decoyEnabled.getState();
         String decoyText = decoyMessage.getText();
         if (useDecoy && decoyText.isEmpty()) {
-            appendStatus("Decoy mode requires a non-empty decoy message.");
+            appendStatus("[error] Decoy mode requires a non-empty decoy message.");
+            return;
+        }
+        if (useDecoy && decoyPassword.getText().isEmpty()) {
+            appendStatus("[error] Decoy mode requires a non-empty decoy password.");
+            return;
+        }
+        if (hideSource == null || !hideSource.isFile() || !hideSource.canRead()) {
+            appendStatus("[error] Carrier is missing or unreadable.");
             return;
         }
         File output = chooseFile("Save generated carrier", FileDialog.SAVE, defaultOutputName(selectedHideKind()));
@@ -382,8 +395,12 @@ public final class MainFrame extends Frame {
         }
         CarrierKind kind = selectedHideKind();
         boolean scattered = hidePlacement.getSelectedIndex() == 1 && kind == CarrierKind.IMAGE;
+        if (hidePlacement.getSelectedIndex() == 1 && kind != CarrierKind.IMAGE) {
+            appendStatus("[warning] Password scattering applies only to image carriers; using sequential placement.");
+        }
         char[] password = hidePassword.getText().toCharArray();
         char[] decoyPass = useDecoy ? decoyPassword.getText().toCharArray() : null;
+        // CryptoUtil clears its input; use an independent copy for the placement seed.
         char[] scatteringPassword = scattered ? hidePassword.getText().toCharArray() : null;
         runAsync("hide", () -> {
             byte[] payload = null;
@@ -391,13 +408,20 @@ public final class MainFrame extends Frame {
                 long capacity = carrierCapacity(source, kind);
                 if (useDecoy) {
                     int containerBytes = Math.toIntExact(Math.min(capacity, (long) DecoyMode.MAX_CONTAINER_BYTES));
-                    payload = DecoyMode.create(message.getBytes(StandardCharsets.UTF_8), password,
-                            decoyText.getBytes(StandardCharsets.UTF_8), decoyPass, containerBytes);
+                    payload = DecoyMode.create(decoyText.getBytes(StandardCharsets.UTF_8), decoyPass,
+                            message.getBytes(StandardCharsets.UTF_8), password, containerBytes);
                 } else {
                     payload = CryptoUtil.encrypt(Payload.wrap(message.getBytes(StandardCharsets.UTF_8)), password);
                 }
+                if ((long) payload.length > capacity) {
+                    throw new IllegalArgumentException("encrypted payload is " + payload.length
+                            + " bytes but carrier capacity is " + capacity + " bytes");
+                }
+                double used = capacity == 0L ? 100.0d : 100.0d * payload.length / capacity;
                 HiddenOutput hidden = embedPayload(source, output, kind, payload, scattered, scatteringPassword);
-                appendStatus("Saved generated carrier: " + hidden.output.getAbsolutePath() + hidden.metrics);
+                appendStatus(String.format(java.util.Locale.ROOT,
+                        "[ok] Saved generated PNG: %s; encrypted payload %d bytes / capacity %d (%.2f%%)%s",
+                        hidden.output.getAbsolutePath(), payload.length, capacity, used, hidden.metrics));
                 onEdt(() -> {
                     if (hidden.original != null) {
                         previewCanvas.setImages(hidden.original, hidden.generated);

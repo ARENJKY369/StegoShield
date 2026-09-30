@@ -122,6 +122,25 @@ public final class DecoyMode {
     }
 
     /**
+     * Returns whether bytes begin with the decoy-container marker. This is a
+     * type check only; authentication still occurs during reveal.
+     *
+     * @param bytes candidate extracted bytes
+     * @return true when the decoy marker is present
+     */
+    public static boolean hasMagic(byte[] bytes) {
+        if (bytes == null || bytes.length < MAGIC.length) {
+            return false;
+        }
+        for (int index = 0; index < MAGIC.length; index++) {
+            if (bytes[index] != MAGIC[index]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
      * Decrypts and CRC-validates the conventionally stored decoy message.
      * Password material is cleared after use. Wrong passwords or tampering
      * propagate the standard {@link javax.crypto.AEADBadTagException} path.

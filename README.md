@@ -21,7 +21,7 @@ Many tools only hide data or only attempt detection. StegoShield brings together
 
 - JDK-only, fully offline Java 17 implementation; no Maven, Gradle, third-party JARs, cloud APIs, AI calls, or network dependencies.
 - AES-256-GCM authenticated encryption with PBKDF2WithHmacSHA256, 65,536 iterations, random 16-byte salt, and random 12-byte IV.
-- PNG/BMP RGB LSB hiding: sequential or password-scattered Fisher–Yates placement, a 32-bit length header, PNG-only lossless output, MSE/PSNR, and amplified difference imagery.
+- PNG/BMP RGB LSB hiding: sequential or password-scattered Fisher–Yates placement, a self-describing versioned header with placement flags and 32-bit length, PNG-only lossless output, MSE/PSNR, and amplified difference imagery.
 - 16-bit signed little-endian PCM WAV LSB hiding while preserving the `AudioFormat`.
 - Unicode zero-width text hiding with U+200B/U+200C, including detector and stripping support for U+200B–U+200D, U+2060, and U+FEFF.
 - PNG IEND-trailing-data and ImageIO `tEXt` metadata fixtures for realistic scanner exercises.
@@ -146,6 +146,22 @@ The script invokes `javac -Xlint:all` before its selected action.
 java -cp out test.StegoShieldSelfTest
 ```
 
+### Deterministic sample and session-report verification
+
+After installing JDK 17+, generate all five samples, print the sorted risk table,
+authenticate/classify the script sample with `demo1234`, export its session report,
+and print the exact report contents with:
+
+```bash
+./build.sh verify-features
+```
+
+An optional destination can be supplied:
+
+```bash
+./build.sh verify-features /path/to/samples
+```
+
 ### Evaluation command
 
 ```bash
@@ -168,16 +184,15 @@ Start the program with `java -cp out ui.MainFrame`.
 6. Optionally enable decoy mode, enter a distinct harmless decoy message and decoy password.
 7. Select a distinct output file and save.
 
-Image outputs are PNG even when a BMP source is selected. WAV output must remain supported 16-bit PCM WAV. Text output is UTF-8. After hiding in an image carrier, the screen shows the original, generated, and amplified x20 difference panels side by side; each panel keeps a minimum size of 300x200 pixels.
+Image outputs are PNG even when a BMP source is selected. WAV output must remain supported 16-bit PCM WAV. Text output is UTF-8. After hiding in an image carrier, the screen shows the original, generated, and amplified x20 difference panels side by side; each panel keeps a minimum size of 300x200 pixels. Image LSB output shows amplified pixel noise. For the append-after-IEND fixture, unchanged black difference pixels are expected and the UI explicitly labels them: “No pixel-level changes: payload was embedded via appended data, not LSB”.
 
 ### Extract
 
-1. Open a carrier.
-2. Choose automatic/sequential extraction or password-scattered image extraction.
-3. Select standard, decoy, or real decoy-mode reveal.
-4. Enter the relevant password and extract.
+1. Open a carrier. Image placement is read automatically from the embedded LSB header; there is no placement selector to guess.
+2. Select standard, decoy, or real decoy-mode reveal. Standard is the explicit default.
+3. Enter the relevant password and extract.
 
-A standard extraction decrypts with AES-GCM, validates `Payload`, then strictly decodes UTF-8. A failure is reported as wrong password, tampering, unsupported carrier, or invalid payload rather than returning garbage. Binary plaintexts that authenticate correctly are reported as binary with their byte count instead of being mislabelled as failures. After a successful extraction, the **Payload Classification** panel below the result shows the authenticated classification of the decrypted plaintext: structural type, every matched indicator, Shannon entropy, and a content verdict of `PLAIN TEXT`, `STRUCTURED FILE` (with the type named), `SCRIPT WITH SUSPICIOUS INDICATORS` (with the matched keywords), `EXECUTABLE BINARY`, or `UNKNOWN BINARY`.
+A standard extraction decrypts with AES-GCM, validates `Payload`, then strictly decodes UTF-8. Choosing either decoy reveal mode for a standard payload reports `no decoy payload found` before attempting authentication, so it is distinguishable from a wrong password. A failure is reported as wrong password, tampering, unsupported carrier, or invalid payload rather than returning garbage. Binary plaintexts that authenticate correctly are reported as binary with their byte count instead of being mislabelled as failures. After a successful extraction, the **Payload Classification** panel below the result shows the authenticated classification of the decrypted plaintext: structural type, every matched indicator, Shannon entropy, and a content verdict of `PLAIN TEXT`, `STRUCTURED FILE` (with the type named), `SCRIPT WITH SUSPICIOUS INDICATORS` (with the matched keywords), `EXECUTABLE BINARY`, or `UNKNOWN BINARY`.
 
 ### Scan
 
@@ -186,7 +201,9 @@ A standard extraction decrypts with AES-GCM, validates `Payload`, then strictly 
 3. For images, inspect the block-based LSB heatmap painted as a semi-transparent colour overlay on the scanned picture, warm and opaque marking near-even blocks. The preview panels below it show the scanned image, and — when the scanned file is the stego image most recently generated on the Hide screen in this session — its original carrier and amplified x20 difference too.
 4. The **Payload Classification** panel below the risk report shows the blind structural type of any payload bytes a best-effort extraction recovers, with the note: full content classification requires extraction with the correct password. No malware claim is made.
 5. Use **Batch folder** and select any file within the target folder; its parent folder is scanned recursively in a background worker.
-6. Use **Export report** to save a UTF-8 `.txt` single or batch report.
+6. Use **Export Session Report** to write a traceable UTF-8 report beside the scanned file. It includes the scan metadata and findings, the most recent blind or authenticated payload classification for that file, app version, and Git commit. Existing reports are never overwritten (`-report-2.txt`, etc. is used).
+7. Use **Export batch/manual report** when you want the existing save dialog or a full batch report.
+8. Use **Load Sample Files** to regenerate the five deterministic demo files in `samples/`. The password is shown in the UI: `demo1234`.
 
 The **Timing demo** is a localhost-only controlled demonstration. It intentionally takes time because it encodes bits using 50 ms and 150 ms gaps.
 
@@ -339,11 +356,11 @@ The following are deliberately out of scope for this project:
 4. **Why is PNG output required for image LSB stego?**
    PNG is lossless. JPEG re-compression can alter LSBs and destroy payload bits.
 
-5. **Why use a 32-bit length header?**
-   It lets extraction know exactly how many embedded bytes to read and reject impossible declarations before allocating memory.
+5. **What is in the image LSB header?**
+   A fixed sequential header contains the `SSLI` magic, format version, placement flags (including the password-scattered bit), and a 32-bit payload length. This lets extraction auto-detect placement and reject impossible declarations before allocation.
 
 6. **How does password-scattered image embedding work?**
-   It derives a SHA-256 seed from the password and uses a deterministic Fisher–Yates shuffle of RGB channel positions. The same password recreates the positions for extraction.
+   It derives a SHA-256 seed from the password and uses a deterministic Fisher–Yates shuffle of RGB channel positions after the public header. The same password recreates the payload positions for extraction; users do not select the mode during extraction.
 
 7. **What does a chi-square z-score indicate here?**
    The scanner checks whether neighboring histogram pairs have been unusually equalized, which can be consistent with LSB replacement. It is heuristic evidence, not proof.
@@ -375,7 +392,7 @@ This inventory lists project classes and their public project-facing methods. Re
 
 - `EmbeddingMode` — enum values `SEQUENTIAL`, `PASSWORD_SCATTERED`.
 - `ImageMetrics` — `meanSquaredError`, `peakSignalToNoiseRatio`, `amplifiedDifference`.
-- `LSBImageStego` — constructors `LSBImageStego()`, `LSBImageStego(EmbeddingMode, char[])`; `sequential`, `passwordScattered`, `mode`, `capacityBytes`, `embed`, `extract`, `readCarrier`, `writePng`, `pngOutputFile`, `copyToRgb`, `close`.
+- `LSBImageStego` — constructors `LSBImageStego()`, `LSBImageStego(EmbeddingMode, char[])`; `sequential`, `passwordScattered`, `mode`, `capacityBytes`, `embed`, `extract`, `inspectHeader`, `extractAutomatically`, `readCarrier`, `writePng`, `pngOutputFile`, `copyToRgb`, `close`.
 
 ### `audio`
 

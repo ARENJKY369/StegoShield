@@ -1,6 +1,7 @@
 # Plain-JDK compiler output
 out/
 *.class
+samples/
 
 # Local editor and operating-system files
 .idea/

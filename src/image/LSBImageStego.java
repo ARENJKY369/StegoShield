@@ -22,21 +22,34 @@ import javax.imageio.stream.ImageOutputStream;
  * Embeds arbitrary bytes in PNG or BMP image color-channel least-significant
  * bits. The in-memory carrier is always copied to {@link BufferedImage#TYPE_INT_RGB}.
  *
- * <p>Every payload starts with a 32-bit unsigned, big-endian byte length. Each
- * payload bit consumes one red, green, or blue LSB. Password-scattered mode
- * applies a deterministic Fisher-Yates permutation to all usable channel
- * positions; it provides placement obfuscation, not a replacement for the
- * authenticated encryption supplied by {@code crypto.CryptoUtil}.</p>
+ * <p>Every payload starts with a fixed, sequential header containing a magic
+ * marker, format version, placement flags, and a 32-bit unsigned payload
+ * length. Keeping this small header sequential lets extraction detect the
+ * placement mode before it reads the encrypted payload. Password-scattered
+ * mode permutes only the RGB positions after that header; it provides placement
+ * obfuscation, not a replacement for authenticated encryption.</p>
  *
  * <p>This class is not thread-safe. A password-scattered instance retains only
  * a SHA-256-derived seed and should be {@link #close() closed} when its caller
  * has finished using it.</p>
  */
 public final class LSBImageStego implements Stego<BufferedImage>, AutoCloseable {
-    /** Bits reserved at the start of the embedded bit stream for payload length. */
-    public static final int LENGTH_HEADER_BITS = Integer.SIZE;
+    /** Four-byte marker in the public image-LSB framing header. */
+    public static final byte[] HEADER_MAGIC = {0x53, 0x53, 0x4C, 0x49}; // SSLI
+    /** Current public image-LSB framing version. */
+    public static final int HEADER_VERSION = 1;
+    /** Flag indicating that payload positions after the header are password-scattered. */
+    public static final int FLAG_PASSWORD_SCATTERED = 0x01;
+    /** Header bytes: magic, version, flags, and unsigned 32-bit payload length. */
+    public static final int HEADER_BYTES = HEADER_MAGIC.length + 1 + 1 + Integer.BYTES;
+    /** RGB LSB positions reserved for the public framing header. */
+    public static final int HEADER_BITS = HEADER_BYTES * Byte.SIZE;
     /** Number of RGB channel positions consumed by each payload byte. */
     public static final int BITS_PER_PAYLOAD_BYTE = Byte.SIZE;
+
+    private static final int VERSION_OFFSET = HEADER_MAGIC.length;
+    private static final int FLAGS_OFFSET = VERSION_OFFSET + 1;
+    private static final int LENGTH_OFFSET = FLAGS_OFFSET + 1;
 
     private static final byte[] PNG_SIGNATURE = {
         (byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A
@@ -102,7 +115,7 @@ public final class LSBImageStego implements Stego<BufferedImage>, AutoCloseable 
     }
 
     /**
-     * Calculates payload capacity after accounting for the 32-bit length header.
+     * Calculates payload capacity after accounting for the public framing header.
      *
      * @param carrier image carrier
      * @return payload byte capacity
@@ -110,10 +123,10 @@ public final class LSBImageStego implements Stego<BufferedImage>, AutoCloseable 
     @Override
     public long capacityBytes(BufferedImage carrier) {
         long channelCount = channelCount(carrier);
-        if (channelCount <= LENGTH_HEADER_BITS) {
+        if (channelCount <= HEADER_BITS) {
             return 0L;
         }
-        return (channelCount - LENGTH_HEADER_BITS) / BITS_PER_PAYLOAD_BYTE;
+        return (channelCount - HEADER_BITS) / BITS_PER_PAYLOAD_BYTE;
     }
 
     /**
@@ -122,7 +135,7 @@ public final class LSBImageStego implements Stego<BufferedImage>, AutoCloseable 
      *
      * @param carrier PNG or BMP-compatible in-memory carrier image
      * @param payload non-empty bytes to embed
-     * @return new RGB image containing the length header and payload bits
+     * @return new RGB image containing the self-describing header and payload bits
      */
     @Override
     public BufferedImage embed(BufferedImage carrier, byte[] payload) {
@@ -137,20 +150,21 @@ public final class LSBImageStego implements Stego<BufferedImage>, AutoCloseable 
                     + " bytes but image capacity is only " + capacity + " bytes");
         }
         BufferedImage embedded = copyToRgb(carrier);
+        writeHeader(embedded, mode, Integer.toUnsignedLong(payload.length));
         int[] positions = positionsFor(embedded);
-        writeLength(embedded, Integer.toUnsignedLong(payload.length), positions);
-        long logicalBitIndex = LENGTH_HEADER_BITS;
+        long payloadBitIndex = 0L;
         for (byte payloadByte : payload) {
             int value = Byte.toUnsignedInt(payloadByte);
             for (int shift = BITS_PER_PAYLOAD_BYTE - 1; shift >= 0; shift--) {
-                writeCarrierBit(embedded, logicalBitIndex++, (value >>> shift) & 1, positions);
+                writeCarrierBit(embedded, payloadBitIndex++, (value >>> shift) & 1, positions);
             }
         }
         return embedded;
     }
 
     /**
-     * Extracts bytes after validating the 32-bit length against available carrier capacity.
+     * Extracts bytes after reading and validating the self-describing header.
+     * The selected encoder mode must match the mode recorded in that header.
      *
      * @param carrier carrier to inspect
      * @return extracted bytes
@@ -158,36 +172,90 @@ public final class LSBImageStego implements Stego<BufferedImage>, AutoCloseable 
     @Override
     public byte[] extract(BufferedImage carrier) {
         ensureOpen();
-        long capacity = capacityBytes(carrier);
-        if (capacity <= 0L) {
-            throw new IllegalArgumentException("image is too small to contain an LSB length header");
-        }
         BufferedImage source = copyToRgb(carrier);
-        int[] positions = positionsFor(source);
-        long declaredLength = readLength(source, positions);
-        if (declaredLength == 0L) {
-            throw new IllegalArgumentException("LSB length header declares an empty payload");
+        Header header = inspectHeader(source);
+        if (header.mode() != mode) {
+            throw new IllegalArgumentException("image payload uses " + header.mode().displayName()
+                    + " placement; extraction must use the mode recorded in its header");
         }
-        if (declaredLength > capacity) {
-            throw new IllegalArgumentException("LSB length header declares " + declaredLength
+        long capacity = capacityBytes(source);
+        if (header.payloadLength() == 0L) {
+            throw new IllegalArgumentException("LSB header declares an empty payload");
+        }
+        if (header.payloadLength() > capacity) {
+            throw new IllegalArgumentException("LSB header declares " + header.payloadLength()
                     + " bytes, exceeding image capacity of " + capacity + " bytes");
         }
-        final int payloadLength;
-        try {
-            payloadLength = Math.toIntExact(declaredLength);
-        } catch (ArithmeticException exception) {
-            throw new IllegalArgumentException("declared payload is too large to allocate", exception);
-        }
+        int payloadLength = Math.toIntExact(header.payloadLength());
+        int[] positions = positionsFor(source);
         byte[] payload = new byte[payloadLength];
-        long logicalBitIndex = LENGTH_HEADER_BITS;
+        long payloadBitIndex = 0L;
         for (int byteIndex = 0; byteIndex < payload.length; byteIndex++) {
             int value = 0;
             for (int bit = 0; bit < BITS_PER_PAYLOAD_BYTE; bit++) {
-                value = (value << 1) | readCarrierBit(source, logicalBitIndex++, positions);
+                value = (value << 1) | readCarrierBit(source, payloadBitIndex++, positions);
             }
             payload[byteIndex] = (byte) value;
         }
         return payload;
+    }
+
+    /**
+     * Reads the public header and returns its recorded placement and payload length.
+     * No password is needed because the header itself is always sequential.
+     *
+     * @param carrier image to inspect
+     * @return validated image-LSB header
+     */
+    public static Header inspectHeader(BufferedImage carrier) {
+        long channels = channelCount(carrier);
+        if (channels < HEADER_BITS) {
+            throw new IllegalArgumentException("image is too small to contain a StegoShield LSB header");
+        }
+        byte[] bytes = new byte[HEADER_BYTES];
+        long physicalBit = 0L;
+        for (int byteIndex = 0; byteIndex < bytes.length; byteIndex++) {
+            int value = 0;
+            for (int bit = 0; bit < Byte.SIZE; bit++) {
+                value = (value << 1) | readPhysicalBit(carrier, physicalBit++);
+            }
+            bytes[byteIndex] = (byte) value;
+        }
+        for (int index = 0; index < HEADER_MAGIC.length; index++) {
+            if (bytes[index] != HEADER_MAGIC[index]) {
+                throw new IllegalArgumentException("StegoShield image LSB header was not found");
+            }
+        }
+        int version = Byte.toUnsignedInt(bytes[VERSION_OFFSET]);
+        if (version != HEADER_VERSION) {
+            throw new IllegalArgumentException("unsupported StegoShield image LSB header version: " + version);
+        }
+        int flags = Byte.toUnsignedInt(bytes[FLAGS_OFFSET]);
+        if ((flags & ~FLAG_PASSWORD_SCATTERED) != 0) {
+            throw new IllegalArgumentException("unsupported StegoShield image LSB header flags: " + flags);
+        }
+        long length = ((long) Byte.toUnsignedInt(bytes[LENGTH_OFFSET]) << 24)
+                | ((long) Byte.toUnsignedInt(bytes[LENGTH_OFFSET + 1]) << 16)
+                | ((long) Byte.toUnsignedInt(bytes[LENGTH_OFFSET + 2]) << 8)
+                | Byte.toUnsignedInt(bytes[LENGTH_OFFSET + 3]);
+        EmbeddingMode placement = (flags & FLAG_PASSWORD_SCATTERED) != 0
+                ? EmbeddingMode.PASSWORD_SCATTERED : EmbeddingMode.SEQUENTIAL;
+        return new Header(placement, length);
+    }
+
+    /**
+     * Detects placement from the header, then extracts with the supplied password
+     * only when scattered placement requires it. The password array is cleared.
+     *
+     * @param carrier image carrier
+     * @param password password for a scattered payload, otherwise optional
+     * @return extracted opaque payload bytes
+     */
+    public static byte[] extractAutomatically(BufferedImage carrier, char[] password) {
+        EmbeddingMode detected = inspectHeader(carrier).mode();
+        try (LSBImageStego stego = new LSBImageStego(detected, password)) {
+            return stego.extract(carrier);
+        }
     }
 
     /**
@@ -329,9 +397,10 @@ public final class LSBImageStego implements Stego<BufferedImage>, AutoCloseable 
         if (channels > Integer.MAX_VALUE) {
             throw new IllegalArgumentException("image has too many channels for password-scattered embedding");
         }
-        int[] positions = new int[(int) channels];
+        long usableChannels = channels - HEADER_BITS;
+        int[] positions = new int[(int) usableChannels];
         for (int index = 0; index < positions.length; index++) {
-            positions[index] = index;
+            positions[index] = HEADER_BITS + index;
         }
         DeterministicRandom random = new DeterministicRandom(shuffleSeed);
         for (int index = positions.length - 1; index > 0; index--) {
@@ -343,19 +412,23 @@ public final class LSBImageStego implements Stego<BufferedImage>, AutoCloseable 
         return positions;
     }
 
-    private static void writeLength(BufferedImage image, long byteLength, int[] positions) {
-        for (int bit = LENGTH_HEADER_BITS - 1; bit >= 0; bit--) {
-            long logicalIndex = LENGTH_HEADER_BITS - 1L - bit;
-            writeCarrierBit(image, logicalIndex, (int) ((byteLength >>> bit) & 1L), positions);
+    private static void writeHeader(BufferedImage image, EmbeddingMode placement, long byteLength) {
+        byte[] header = new byte[HEADER_BYTES];
+        System.arraycopy(HEADER_MAGIC, 0, header, 0, HEADER_MAGIC.length);
+        header[VERSION_OFFSET] = (byte) HEADER_VERSION;
+        header[FLAGS_OFFSET] = placement == EmbeddingMode.PASSWORD_SCATTERED
+                ? (byte) FLAG_PASSWORD_SCATTERED : 0;
+        header[LENGTH_OFFSET] = (byte) (byteLength >>> 24);
+        header[LENGTH_OFFSET + 1] = (byte) (byteLength >>> 16);
+        header[LENGTH_OFFSET + 2] = (byte) (byteLength >>> 8);
+        header[LENGTH_OFFSET + 3] = (byte) byteLength;
+        long physicalBit = 0L;
+        for (byte value : header) {
+            int unsigned = Byte.toUnsignedInt(value);
+            for (int shift = Byte.SIZE - 1; shift >= 0; shift--) {
+                writePhysicalBit(image, physicalBit++, (unsigned >>> shift) & 1);
+            }
         }
-    }
-
-    private static long readLength(BufferedImage image, int[] positions) {
-        long length = 0L;
-        for (long logicalIndex = 0L; logicalIndex < LENGTH_HEADER_BITS; logicalIndex++) {
-            length = (length << 1) | readCarrierBit(image, logicalIndex, positions);
-        }
-        return length;
     }
 
     private static void writeCarrierBit(BufferedImage image, long logicalBitIndex, int bit,
@@ -363,25 +436,11 @@ public final class LSBImageStego implements Stego<BufferedImage>, AutoCloseable 
         if (bit != 0 && bit != 1) {
             throw new IllegalArgumentException("carrier bit must be zero or one");
         }
-        long channelPosition = channelPosition(logicalBitIndex, positions);
-        long pixelIndex = channelPosition / 3L;
-        int channel = (int) (channelPosition % 3L);
-        int x = (int) (pixelIndex % image.getWidth());
-        int y = Math.toIntExact(pixelIndex / image.getWidth());
-        int shift = channel == 0 ? 16 : channel == 1 ? 8 : 0;
-        int rgb = image.getRGB(x, y);
-        int updated = (rgb & ~(1 << shift)) | (bit << shift);
-        image.setRGB(x, y, updated);
+        writePhysicalBit(image, channelPosition(logicalBitIndex, positions), bit);
     }
 
     private static int readCarrierBit(BufferedImage image, long logicalBitIndex, int[] positions) {
-        long channelPosition = channelPosition(logicalBitIndex, positions);
-        long pixelIndex = channelPosition / 3L;
-        int channel = (int) (channelPosition % 3L);
-        int x = (int) (pixelIndex % image.getWidth());
-        int y = Math.toIntExact(pixelIndex / image.getWidth());
-        int shift = channel == 0 ? 16 : channel == 1 ? 8 : 0;
-        return (image.getRGB(x, y) >>> shift) & 1;
+        return readPhysicalBit(image, channelPosition(logicalBitIndex, positions));
     }
 
     private static long channelPosition(long logicalBitIndex, int[] positions) {
@@ -389,12 +448,32 @@ public final class LSBImageStego implements Stego<BufferedImage>, AutoCloseable 
             throw new IllegalArgumentException("logical bit index must not be negative");
         }
         if (positions == null) {
-            return logicalBitIndex;
+            return HEADER_BITS + logicalBitIndex;
         }
         if (logicalBitIndex >= positions.length) {
             throw new IllegalArgumentException("logical bit index exceeds scattered carrier positions");
         }
         return positions[Math.toIntExact(logicalBitIndex)];
+    }
+
+
+    private static void writePhysicalBit(BufferedImage image, long channelPosition, int bit) {
+        long pixelIndex = channelPosition / 3L;
+        int channel = (int) (channelPosition % 3L);
+        int x = (int) (pixelIndex % image.getWidth());
+        int y = Math.toIntExact(pixelIndex / image.getWidth());
+        int shift = channel == 0 ? 16 : channel == 1 ? 8 : 0;
+        int rgb = image.getRGB(x, y);
+        image.setRGB(x, y, (rgb & ~(1 << shift)) | (bit << shift));
+    }
+
+    private static int readPhysicalBit(BufferedImage image, long channelPosition) {
+        long pixelIndex = channelPosition / 3L;
+        int channel = (int) (channelPosition % 3L);
+        int x = (int) (pixelIndex % image.getWidth());
+        int y = Math.toIntExact(pixelIndex / image.getWidth());
+        int shift = channel == 0 ? 16 : channel == 1 ? 8 : 0;
+        return (image.getRGB(x, y) >>> shift) & 1;
     }
 
     private static byte[] seedFromPassword(char[] password) {
@@ -468,6 +547,17 @@ public final class LSBImageStego implements Stego<BufferedImage>, AutoCloseable 
     private static void clear(char[] characters) {
         if (characters != null) {
             Arrays.fill(characters, '\0');
+        }
+    }
+
+    /** Parsed public image-LSB framing header. */
+    public record Header(EmbeddingMode mode, long payloadLength) {
+        /** Validates directly constructed headers. */
+        public Header {
+            Objects.requireNonNull(mode, "header placement mode must not be null");
+            if (payloadLength < 0L || payloadLength > 0xFFFF_FFFFL) {
+                throw new IllegalArgumentException("payload length is outside the unsigned 32-bit range");
+            }
         }
     }
 

@@ -17,6 +17,7 @@ import audio.WavData;
 import core.Payload;
 import crypto.CryptoUtil;
 import decoy.DecoyMode;
+import demo.SampleFileGenerator;
 import eof.PngEofStego;
 import eof.PngMetadataStego;
 import eof.PngUtil;
@@ -56,7 +57,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.security.GeneralSecurityException;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -97,9 +100,10 @@ public final class MainFrame extends Frame {
     private TextField decoyPassword;
     private Label capacityLabel;
     private ImagePreviewCanvas previewCanvas;
+    private Label hideDifferenceLabel;
     private File hideSource;
 
-    private Choice extractPlacement;
+    private Label extractPlacementLabel;
     private Choice extractMode;
     private TextField extractSourceField;
     private TextField extractPassword;
@@ -116,6 +120,10 @@ public final class MainFrame extends Frame {
     private ImagePreviewCanvas scanPreviewCanvas;
     private transient ScanReport latestReport;
     private transient List<ScanReport> latestBatch;
+    /** Most recent blind or authenticated classification keyed by canonical file path. */
+    private final transient Map<String, PayloadClassifier.Classification> sessionClassifications;
+    /** Scan reports retained by file so Extract can export the matching session result. */
+    private final transient Map<String, ScanReport> sessionReports;
     /** Last image pair generated on the Hide screen, for Scan-screen comparison. */
     private transient GeneratedCarrier lastGenerated;
 
@@ -136,6 +144,8 @@ public final class MainFrame extends Frame {
         cleaner = new StegoCleaner(scanner);
         extractionService = new ExtractionService();
         latestBatch = List.of();
+        sessionClassifications = new HashMap<>();
+        sessionReports = new HashMap<>();
 
         setLayout(new BorderLayout(6, 6));
         add(buildNavigation(), BorderLayout.NORTH);
@@ -213,6 +223,7 @@ public final class MainFrame extends Frame {
                 hideSourceField.setText("");
                 capacityLabel.setText("Capacity: select a carrier");
                 previewCanvas.clear();
+                hideDifferenceLabel.setText(" ");
             }
         });
         hidePlacement = new Choice();
@@ -249,7 +260,12 @@ public final class MainFrame extends Frame {
         messagePanel.add(hideMessage, BorderLayout.CENTER);
         center.add(messagePanel);
         previewCanvas = new ImagePreviewCanvas();
-        center.add(previewCanvas);
+        Panel previewPanel = new Panel(new BorderLayout(0, 4));
+        previewPanel.add(previewCanvas, BorderLayout.CENTER);
+        hideDifferenceLabel = new Label(" ", Label.CENTER);
+        hideDifferenceLabel.setForeground(Theme.MUTED);
+        previewPanel.add(hideDifferenceLabel, BorderLayout.SOUTH);
+        center.add(previewPanel);
         screen.add(center, BorderLayout.CENTER);
 
         Panel actions = new Panel();
@@ -264,19 +280,18 @@ public final class MainFrame extends Frame {
         Panel controls = new Panel(new GridLayout(0, 2, 6, 6));
         extractSourceField = lockedField();
         extractPassword = passwordField();
-        extractPlacement = new Choice();
-        extractPlacement.add("Sequential / automatic carrier extraction");
-        extractPlacement.add("Password-scattered image positions");
+        extractPlacementLabel = new Label("Automatic — read from embedded image header");
         extractMode = new Choice();
         extractMode.add("Standard encrypted message");
         extractMode.add("Decoy message");
         extractMode.add("Real decoy-mode message");
+        extractMode.select(0); // Never silently default to a decoy reveal path.
         controls.add(new Label("Carrier file"));
         controls.add(extractSourceField);
         controls.add(new Label("Password"));
         controls.add(extractPassword);
         controls.add(new Label("Image placement"));
-        controls.add(extractPlacement);
+        controls.add(extractPlacementLabel);
         controls.add(new Label("Reveal mode"));
         controls.add(extractMode);
         screen.add(controls, BorderLayout.NORTH);
@@ -297,6 +312,8 @@ public final class MainFrame extends Frame {
         Panel actions = new Panel();
         actions.add(navigationButton("Open carrier", this::chooseExtractCarrier));
         actions.add(navigationButton("Extract", this::beginExtract));
+        actions.add(navigationButton("Export Session Report",
+                () -> beginSessionReportExport(extractSource)));
         screen.add(actions, BorderLayout.SOUTH);
         return screen;
     }
@@ -349,7 +366,11 @@ public final class MainFrame extends Frame {
         actions.add(navigationButton("Scan file", this::beginScan));
         actions.add(navigationButton("Batch folder", this::beginBatchScan));
         actions.add(navigationButton("Timing demo", this::beginTimingDemo));
-        actions.add(navigationButton("Export report", this::beginReportExport));
+        actions.add(navigationButton("Export Session Report",
+                () -> beginSessionReportExport(null)));
+        actions.add(navigationButton("Export batch/manual report", this::beginReportExport));
+        actions.add(navigationButton("Load Sample Files", this::beginLoadSamples));
+        actions.add(new Label("Password for sample files: " + SampleFileGenerator.DEMO_PASSWORD));
         screen.add(actions, BorderLayout.SOUTH);
         return screen;
     }
@@ -386,6 +407,8 @@ public final class MainFrame extends Frame {
         Panel actions = new Panel();
         actions.add(navigationButton("Open file", this::chooseCleanFile));
         actions.add(navigationButton("Clean and re-scan", this::beginClean));
+        actions.add(navigationButton("Export Session Report",
+                () -> beginSessionReportExport(null)));
         screen.add(actions, BorderLayout.SOUTH);
         return screen;
     }
@@ -490,6 +513,7 @@ public final class MainFrame extends Frame {
                 onEdt(() -> {
                     if (hidden.original != null) {
                         previewCanvas.setImages(hidden.original, hidden.generated);
+                        hideDifferenceLabel.setText(hidden.differenceNote);
                     }
                     if (hidden.original != null && hidden.generated != null) {
                         lastGenerated = new GeneratedCarrier(hidden.output, hidden.original, hidden.generated);
@@ -509,6 +533,7 @@ public final class MainFrame extends Frame {
         if (selected != null) {
             extractSource = selected;
             extractSourceField.setText(selected.getAbsolutePath());
+            extractPlacementLabel.setText("Automatic — read from embedded image header");
         }
     }
 
@@ -520,12 +545,15 @@ public final class MainFrame extends Frame {
         }
         char[] password = extractPassword.getText().toCharArray();
         int mode = extractMode.getSelectedIndex();
-        boolean scattered = extractPlacement.getSelectedIndex() == 1;
         onEdt(() -> extractClassificationArea.setText(EXTRACTION_CLASSIFICATION_PLACEHOLDER));
         runAsync("extract", () -> {
+            byte[] raw = null;
+            byte[] message = null;
             try {
-                byte[] raw = extractRawPayload(source, scattered, password);
-                byte[] message;
+                raw = extractRawPayload(source, password);
+                if (mode != 0 && !DecoyMode.hasMagic(raw)) {
+                    throw new IllegalArgumentException("no decoy payload found");
+                }
                 if (mode == 1) {
                     message = DecoyMode.revealDecoy(raw, password);
                 } else if (mode == 2) {
@@ -539,8 +567,10 @@ public final class MainFrame extends Frame {
                     }
                 }
                 PayloadClassifier.Classification classification = PayloadClassifier.classifyAuthenticated(message);
+                synchronized (sessionClassifications) {
+                    sessionClassifications.put(sessionKey(source), classification);
+                }
                 String plaintext = displayText(message);
-                clear(message);
                 onEdt(() -> {
                     extractResult.setText(plaintext);
                     extractClassificationArea.setText(classification.toText());
@@ -548,7 +578,16 @@ public final class MainFrame extends Frame {
                 appendStatus("Extraction and authenticated validation succeeded for " + source.getName() + ".");
             } catch (AEADBadTagException exception) {
                 appendStatus("Extraction failed: wrong password or tampered encrypted data.");
+            } catch (IllegalArgumentException exception) {
+                if ("no decoy payload found".equals(exception.getMessage())) {
+                    onEdt(() -> extractResult.setText("no decoy payload found"));
+                    appendStatus("Extraction failed: no decoy payload found.");
+                } else {
+                    throw exception;
+                }
             } finally {
+                clear(raw);
+                clear(message);
                 clear(password);
             }
         });
@@ -575,6 +614,10 @@ public final class MainFrame extends Frame {
             PayloadClassifier.Classification payloadClassification = classifyRecoveredPayload(source, pair);
             latestReport = report;
             latestBatch = List.of();
+            synchronized (sessionClassifications) {
+                sessionClassifications.put(sessionKey(source), payloadClassification);
+                sessionReports.put(sessionKey(source), report);
+            }
             onEdt(() -> {
                 scanReportArea.setText(report.toText());
                 setRiskLabel(report);
@@ -608,14 +651,20 @@ public final class MainFrame extends Frame {
             @Override
             public void onComplete(List<ScanReport> reports) {
                 latestBatch = reports;
+                latestReport = reports.isEmpty() ? null : reports.get(0);
+                synchronized (sessionClassifications) {
+                    for (ScanReport report : reports) {
+                        sessionReports.put(sessionKey(report.file()), report);
+                    }
+                }
                 onEdt(() -> {
-                    scanReportArea.append("\nBatch complete: " + reports.size()
-                            + " file(s), sorted by descending risk.\n");
+                    scanReportArea.setText(batchRiskTable(reports));
                     if (!reports.isEmpty()) {
                         setRiskLabel(reports.get(0));
                     }
                 });
-                appendStatus("Batch scan completed with " + reports.size() + " report(s).");
+                appendStatus("Batch scan completed with " + reports.size()
+                        + " report(s), sorted by descending risk.");
             }
 
             @Override
@@ -666,6 +715,42 @@ public final class MainFrame extends Frame {
         });
     }
 
+    private void beginSessionReportExport(File preferredFile) {
+        ScanReport report = latestReport;
+        if (preferredFile != null) {
+            synchronized (sessionClassifications) {
+                report = sessionReports.get(sessionKey(preferredFile));
+            }
+        }
+        if (report == null) {
+            appendStatus("Run a scan for this file or a clean re-scan before exporting a session report.");
+            return;
+        }
+        ScanReport selectedReport = report;
+        PayloadClassifier.Classification classification;
+        synchronized (sessionClassifications) {
+            classification = sessionClassifications.get(sessionKey(selectedReport.file()));
+        }
+        runAsync("session report export", () -> {
+            File written = ReportExporter.exportSession(selectedReport, classification);
+            appendStatus("Saved session report without overwriting existing files: "
+                    + written.getAbsolutePath());
+        });
+    }
+
+    private void beginLoadSamples() {
+        File directory = SampleFileGenerator.defaultDirectory(MainFrame.class);
+        runAsync("sample generation", () -> {
+            List<File> generated = SampleFileGenerator.generate(directory);
+            onEdt(() -> scanSourceField.setText(generated.get(0).getAbsolutePath()));
+            appendStatus("Generated " + generated.size() + " deterministic sample files in "
+                    + directory.getAbsolutePath() + ". Demo password: " + SampleFileGenerator.DEMO_PASSWORD);
+            for (File file : generated) {
+                appendStatus("Sample: " + file.getName());
+            }
+        });
+    }
+
     private void beginReportExport() {
         if (latestReport == null && latestBatch.isEmpty()) {
             appendStatus("Run a scan or batch scan before exporting a report.");
@@ -708,6 +793,14 @@ public final class MainFrame extends Frame {
         }
         runAsync("clean", () -> {
             SanitizationResult result = cleaner.clean(source, output);
+            latestReport = result.after();
+            latestBatch = List.of();
+            PayloadClassifier.Classification cleanedClassification =
+                    classifyRecoveredPayload(result.output(), null);
+            synchronized (sessionClassifications) {
+                sessionClassifications.put(sessionKey(result.output()), cleanedClassification);
+                sessionReports.put(sessionKey(result.output()), result.after());
+            }
             onEdt(() -> {
                 cleanResultArea.setText("Strategy: " + result.strategy() + "\n\nBefore:\n"
                         + result.before().toText() + "\nAfter:\n" + result.after().toText()
@@ -775,13 +868,13 @@ public final class MainFrame extends Frame {
                 WavData carrier = LSBAudioStego.readWav(source);
                 WavData embedded = new LSBAudioStego().embed(carrier, payload);
                 File output = LSBAudioStego.writeWav(embedded, requestedOutput);
-                yield new HiddenOutput(output, null, null, "");
+                yield new HiddenOutput(output, null, null, "", " ");
             }
             case TEXT -> {
                 String carrier = Files.readString(source.toPath(), StandardCharsets.UTF_8);
                 String embedded = new ZeroWidthStego().embed(carrier, payload);
                 Files.writeString(requestedOutput.toPath(), embedded, StandardCharsets.UTF_8);
-                yield new HiddenOutput(requestedOutput, null, null, "");
+                yield new HiddenOutput(requestedOutput, null, null, "", " ");
             }
             case PNG_EOF -> embedPngEof(source, requestedOutput, payload);
             case PNG_METADATA -> embedPngMetadata(source, requestedOutput, payload);
@@ -795,10 +888,12 @@ public final class MainFrame extends Frame {
         try (LSBImageStego stego = new LSBImageStego(mode, scatteringPassword)) {
             BufferedImage generated = stego.embed(original, payload);
             File output = LSBImageStego.writePng(generated, requestedOutput);
-            double mse = ImageMetrics.meanSquaredError(original, generated);
-            double psnr = ImageMetrics.peakSignalToNoiseRatio(original, generated);
+            BufferedImage saved = LSBImageStego.readCarrier(output);
+            double mse = ImageMetrics.meanSquaredError(original, saved);
+            double psnr = ImageMetrics.peakSignalToNoiseRatio(original, saved);
             String metrics = String.format(java.util.Locale.ROOT, " (MSE %.6f, PSNR %.2f dB)", mse, psnr);
-            return new HiddenOutput(output, original, generated, metrics);
+            return new HiddenOutput(output, original, saved, metrics,
+                    "Amplified pixel-level LSB changes (x20)");
         }
     }
 
@@ -807,7 +902,8 @@ public final class MainFrame extends Frame {
         File written = PngEofStego.appendAfterIend(source, payload, output);
         BufferedImage original = LSBImageStego.readCarrier(source);
         BufferedImage generated = LSBImageStego.readCarrier(written);
-        return new HiddenOutput(written, original, generated, " (PNG trailing-byte fixture)");
+        return new HiddenOutput(written, original, generated, " (PNG trailing-byte fixture)",
+                "No pixel-level changes: payload was embedded via appended data, not LSB");
     }
 
     private HiddenOutput embedPngMetadata(File source, File requestedOutput, byte[] payload) throws IOException {
@@ -815,24 +911,26 @@ public final class MainFrame extends Frame {
         File written = PngMetadataStego.embedInTextChunk(source, payload, output);
         BufferedImage original = LSBImageStego.readCarrier(source);
         BufferedImage generated = LSBImageStego.readCarrier(written);
-        return new HiddenOutput(written, original, generated, " (PNG tEXt metadata fixture)");
+        return new HiddenOutput(written, original, generated, " (PNG tEXt metadata fixture)",
+                "No pixel-level changes: payload was embedded via PNG metadata, not LSB");
     }
 
-    private byte[] extractRawPayload(File source, boolean scattered, char[] password)
+    private byte[] extractRawPayload(File source, char[] password)
             throws IOException, GeneralSecurityException {
         FileSignature signature = detectSignature(source);
-        if ((signature == FileSignature.PNG || signature == FileSignature.BMP) && scattered) {
-            BufferedImage image = LSBImageStego.readCarrier(source);
-            try (LSBImageStego stego = LSBImageStego.passwordScattered(Arrays.copyOf(password, password.length))) {
-                return stego.extract(image);
-            }
-        }
         if (signature == FileSignature.PNG || signature == FileSignature.BMP) {
-            ExtractionAttempt attempt = extractionService.attempt(source);
-            if (!attempt.successful()) {
-                throw new IllegalArgumentException(attempt.message());
+            // Preserve fixture precedence for PNG appended data and metadata.
+            if (signature == FileSignature.PNG) {
+                ExtractionAttempt attempt = extractionService.attempt(source);
+                if (attempt.successful() && !attempt.technique().contains("RGB LSB")) {
+                    onEdt(() -> extractPlacementLabel.setText("Not applicable — " + attempt.technique()));
+                    return attempt.payload();
+                }
             }
-            return attempt.payload();
+            BufferedImage image = LSBImageStego.readCarrier(source);
+            LSBImageStego.Header header = LSBImageStego.inspectHeader(image);
+            onEdt(() -> extractPlacementLabel.setText("Auto-detected: " + header.mode().displayName()));
+            return LSBImageStego.extractAutomatically(image, Arrays.copyOf(password, password.length));
         }
         if (signature == FileSignature.WAV) {
             return new LSBAudioStego().extract(LSBAudioStego.readWav(source));
@@ -944,6 +1042,26 @@ public final class MainFrame extends Frame {
             case SUSPICIOUS -> new Color(255, 200, 95);
             case LIKELY_CONTAINS_HIDDEN_DATA -> new Color(236, 122, 122);
         };
+    }
+
+    private static String batchRiskTable(List<ScanReport> reports) {
+        StringBuilder table = new StringBuilder("StegoShield batch scan — sorted by descending risk\n\n");
+        table.append(String.format(java.util.Locale.ROOT, "%-34s %8s  %s%n", "File", "Risk", "Label"));
+        table.append("--------------------------------------------------------------------------\n");
+        for (ScanReport report : reports) {
+            table.append(String.format(java.util.Locale.ROOT, "%-34s %7d/100  %s%n",
+                    report.file().getName(), report.riskScore(), report.riskLevel().displayName()));
+        }
+        table.append("\nFiles scanned: ").append(reports.size()).append('\n');
+        return table.toString();
+    }
+
+    private static String sessionKey(File file) {
+        try {
+            return file.getCanonicalPath();
+        } catch (IOException exception) {
+            return file.getAbsolutePath();
+        }
     }
 
     private File chooseFile(String title, int mode, String defaultName) {
@@ -1060,7 +1178,8 @@ public final class MainFrame extends Frame {
     private record GeneratedCarrier(File output, BufferedImage original, BufferedImage generated) {
     }
 
-    private record HiddenOutput(File output, BufferedImage original, BufferedImage generated, String metrics) {
+    private record HiddenOutput(File output, BufferedImage original, BufferedImage generated, String metrics,
+            String differenceNote) {
     }
 
     @FunctionalInterface

@@ -25,9 +25,11 @@ Many tools only hide data or only attempt detection. StegoShield brings together
 - 16-bit signed little-endian PCM WAV LSB hiding while preserving the `AudioFormat`.
 - Unicode zero-width text hiding with U+200B/U+200C, including detector and stripping support for U+200B–U+200D, U+2060, and U+FEFF.
 - PNG IEND-trailing-data and ImageIO `tEXt` metadata fixtures for realistic scanner exercises.
-- Explainable 0–100 risk scanner with file signatures, extension mismatches, carrier trailing data, entropy, embedded signatures, chi-square, LSB statistics, invisible Unicode, metadata sizing, and WAV LSB checks.
-- LSB heatmap, sorted background batch scan, UTF-8 report export, and payload extraction attempts.
+- Explainable 0–100 risk scanner with file signatures, extension mismatches, carrier trailing data, entropy, embedded signatures, a per-channel chi-square equalized-prefix sweep (the classic pair-of-values attack, able to flag sequential LSB replacement independently), LSB statistics, invisible Unicode, metadata sizing, and WAV LSB checks. The measured pair-of-values chi-square z-score is always reported as its own Findings line for qualifying images.
+- LSB heatmap rendered as a semi-transparent per-block colour overlay on the scanned image itself, sorted background batch scan, UTF-8 report export, and payload extraction attempts.
+- Original/Stego/Difference preview panels (minimum 300x200) on the Hide and Scan screens, plus coloured CLEAN/SUSPICIOUS/LIKELY risk badges next to the risk scores on the Scan and Clean screens.
 - Non-destructive Stego Cleaner that randomizes—not zeroes—supported carrier LSBs and re-scans the output.
+- Payload classification panel: blind structural typing of recoverable payload bytes on the Scan screen, and full authenticated triage (structural type, suspicious script keyword indicators, Shannon entropy, content verdict) of decrypted plaintext on the Extract screen. It never claims malware or safety; every verdict is paired with its evidence.
 - Fixed-size decoy/real dual-password mode with documented plausible-deniability limits.
 - Localhost-only timing-channel simulation and timing histogram/bimodality analysis.
 - Evaluation runner that computes measured detection and false-positive rates at runtime; it never pre-fills results.
@@ -147,10 +149,10 @@ java -cp out test.StegoShieldSelfTest
 ### Evaluation command
 
 ```bash
-java -cp out eval.EvaluationRunner <clean-image-folder> [output-root]
+java -cp out eval.EvaluationRunner <clean-image-folder> [output-root] [sequential|scattered]
 ```
 
-The evaluation output directory must be outside the clean-image input folder so generated specimens cannot contaminate clean controls.
+The evaluation output directory must be outside the clean-image input folder so generated specimens cannot contaminate clean controls. The optional third argument selects LSB payload placement: `sequential` (default) or `scattered`, which password-scatters bits with a fixed public evaluation password the scanner never receives, mirroring a real scan where the password is unknown. Scattered placement is measurably harder to detect: on a 32-carrier corpus (10 photographs, 12 synthetic graphics including dithered gradients and flat colors, 10 noisy or high-ISO-style images), scattered LSB at 10% capacity flagged 25.0% versus 87.5% for sequential, and scattered LSB at 100% capacity flagged 87.5% because full coverage equalizes pairs regardless of placement order. Structural checks (trailing data after the format's end marker, embedded file signatures, extension/signature mismatch) achieved 100% detection with 0% false positives across all test scenarios — these are deterministic, format-level checks and are the tool's most reliable detection capability. Payloads are cryptographically random, so low-rate rows can move by one sample between runs. Run the evaluation against your own corpus for authoritative numbers.
 
 ## GUI usage
 
@@ -166,7 +168,7 @@ Start the program with `java -cp out ui.MainFrame`.
 6. Optionally enable decoy mode, enter a distinct harmless decoy message and decoy password.
 7. Select a distinct output file and save.
 
-Image outputs are PNG even when a BMP source is selected. WAV output must remain supported 16-bit PCM WAV. Text output is UTF-8.
+Image outputs are PNG even when a BMP source is selected. WAV output must remain supported 16-bit PCM WAV. Text output is UTF-8. After hiding in an image carrier, the screen shows the original, generated, and amplified x20 difference panels side by side; each panel keeps a minimum size of 300x200 pixels.
 
 ### Extract
 
@@ -175,15 +177,16 @@ Image outputs are PNG even when a BMP source is selected. WAV output must remain
 3. Select standard, decoy, or real decoy-mode reveal.
 4. Enter the relevant password and extract.
 
-A standard extraction decrypts with AES-GCM, validates `Payload`, then strictly decodes UTF-8. A failure is reported as wrong password, tampering, unsupported carrier, or invalid payload rather than returning garbage.
+A standard extraction decrypts with AES-GCM, validates `Payload`, then strictly decodes UTF-8. A failure is reported as wrong password, tampering, unsupported carrier, or invalid payload rather than returning garbage. Binary plaintexts that authenticate correctly are reported as binary with their byte count instead of being mislabelled as failures. After a successful extraction, the **Payload Classification** panel below the result shows the authenticated classification of the decrypted plaintext: structural type, every matched indicator, Shannon entropy, and a content verdict of `PLAIN TEXT`, `STRUCTURED FILE` (with the type named), `SCRIPT WITH SUSPICIOUS INDICATORS` (with the matched keywords), `EXECUTABLE BINARY`, or `UNKNOWN BINARY`.
 
 ### Scan
 
 1. Open a file and choose **Scan file**.
-2. Read the risk label, score, and every triggered reason.
-3. For images, inspect the block-based LSB heatmap.
-4. Use **Batch folder** and select any file within the target folder; its parent folder is scanned recursively in a background worker.
-5. Use **Export report** to save a UTF-8 `.txt` single or batch report.
+2. Read the risk label, score, coloured CLEAN/SUSPICIOUS/LIKELY badge, and every triggered reason. Image reports always include their own chi-square pair-of-values z-score line, which scores points only when it triggers.
+3. For images, inspect the block-based LSB heatmap painted as a semi-transparent colour overlay on the scanned picture, warm and opaque marking near-even blocks. The preview panels below it show the scanned image, and — when the scanned file is the stego image most recently generated on the Hide screen in this session — its original carrier and amplified x20 difference too.
+4. The **Payload Classification** panel below the risk report shows the blind structural type of any payload bytes a best-effort extraction recovers, with the note: full content classification requires extraction with the correct password. No malware claim is made.
+5. Use **Batch folder** and select any file within the target folder; its parent folder is scanned recursively in a background worker.
+6. Use **Export report** to save a UTF-8 `.txt` single or batch report.
 
 The **Timing demo** is a localhost-only controlled demonstration. It intentionally takes time because it encodes bits using 50 ms and 150 ms gaps.
 
@@ -193,7 +196,7 @@ The **Timing demo** is a localhost-only controlled demonstration. It intentional
 2. Select a distinct destination.
 3. Choose **Clean and re-scan**.
 
-The Cleaner never modifies the original. It displays the applied strategy, original report, output report, and score difference. A lower score is useful feedback, not proof every possible channel was removed.
+The Cleaner never modifies the original. It displays the applied strategy, original report, output report, and score difference, with before/after risk scores and CLEAN/SUSPICIOUS/LIKELY badges at the top of the screen. A lower score is useful feedback, not proof every possible channel was removed.
 
 ### Evaluation
 
@@ -217,13 +220,28 @@ The final score is capped at 100. Thresholds and point values live in `analysis.
 | PNG IEND or JPEG FFD9 trailing bytes | 30 | Carrier boundary and trailing byte count |
 | Trailing entropy at least 7.5 bits/byte | 15 | Measured Shannon entropy |
 | ZIP, EXE/MZ, PDF, or ELF after carrier data | 35 each type | Type and offset after carrier boundary |
-| Pair-of-values chi-square | 18 | z-score and active degrees of freedom |
+| Chi-square equalized-prefix sweep | 25 | channel, equalized-prefix coverage and samples, prefix z-score, global z and df |
+| Pair-of-values chi-square global equalization | 18 | z-score and active degrees of freedom |
 | Image LSB global/block randomness | 18 | global z-score and balanced-block fraction |
 | Invisible Unicode | 35 | per-code-point counts |
 | Oversized PNG textual metadata | 18 | textual metadata bytes/chunk size |
 | WAV LSB randomness | 18 | sample-LSB balance z-score |
 
-The chi-square implementation groups adjacent values such as 42/43, calculates expected values from each pair total, and uses one degree of freedom for every non-empty pair. It does not apply the test to tiny images or too few active pairs.
+The chi-square implementation groups adjacent values such as 42/43, calculates expected values from each pair total, and uses one degree of freedom for every non-empty pair. It does not apply the test to tiny images or too few active pairs. Every qualifying image scan reports the measured chi-square z-score as its own Findings line.
+
+Two chi-square triggers contribute independently. The equalized-prefix sweep is the classic Westfeld-Pfitzmann style attack run per color channel: channel samples are consumed in raster order and the largest prefix whose adjacent-value pairs are statistically consistent with equalization (prefix z at or below +1.0, checkpoints every 256 samples) is recorded. Sequential LSB replacement of random-looking data equalizes pairs over exactly the embedded prefix, so the sweep both detects the technique and estimates its coverage; it scores when the equalized prefix covers at least 5% of a channel and at least 512 samples. The legacy global trigger (combined-RGB z at or below -3.0, indicating equalization beyond chance) is kept for small images below the sweep minimums.
+
+## Payload classification
+
+`analysis.PayloadClassifier` performs heuristic static triage of recovered payload bytes in two modes and never claims that content is malware or safe.
+
+**Mode 1 — blind (no password available).** It runs on payload bytes recovered by the best-effort extraction service, but not on bytes carrying this app's own headers: an `SSHD`-framed payload, an `SSDN` decoy container, or bytes flagged as this app's AES-GCM salt|IV|ciphertext container (the Scan screen flags the stego image most recently generated on the Hide screen in the same session). Everything else is labelled by structural type only — PNG, JPEG, BMP, WAV, ZIP, DOCX/XLSX/PPTX (ZIP plus their internal Office Open XML entries), Windows executable (MZ), ELF, PDF, or plain text by printable-ASCII ratio — with no malware claim. The panel always adds: full content classification requires extraction with the correct password.
+
+**Mode 2 — authenticated (after successful password decryption).** The same structural detection runs on the decrypted plaintext. Printable UTF-8 with no binary markers is a plain text message unless one of the listed suspicious indicator keywords matches, in which case the verdict is `SCRIPT WITH SUSPICIOUS INDICATORS` with every match listed. The keywords, matched case-insensitively, are: `Invoke-Expression`, `-EncodedCommand`, `eval(`, `exec(`, `base64 -d`, `/bin/sh -c`, `cmd.exe /c`, `wget `, `curl `, `Add-MpPreference -ExclusionPath`, `reg add`, `New-Object Net.WebClient`. Script-like markers such as shebangs, batch headers, and VBA module headers are reported as evidence without inferring intent. The plaintext's Shannon entropy is reported as a number; high entropy alone is never translated into a verdict because compressed or legitimate binary data is also high-entropy.
+
+The content verdict is one of `PLAIN TEXT`, `STRUCTURED FILE` (the type is named), `SCRIPT WITH SUSPICIOUS INDICATORS` (indicators listed), `EXECUTABLE BINARY`, or `UNKNOWN BINARY`, and it is always paired with the concrete evidence that produced it.
+
+Full malware detection requires signature databases and behavioral sandboxing that are out of scope for an offline, JDK-only tool. StegoShield instead performs heuristic static triage: identifying file type by structure and flagging known suspicious code patterns, which is the same first layer real antivirus engines use before deeper analysis.
 
 ## Sanitizer behavior
 
@@ -266,7 +284,7 @@ Scheduling jitter, TCP buffering, and operating-system load can affect the demon
 
 ## Limitations and scanner caveats
 
-- **Low embedding rates and password-scattered embedding reduce detection accuracy.** They may leave too little statistical evidence for the implemented image tests.
+- **Low embedding rates and password-scattered embedding reduce detection accuracy.** They may leave too little statistical evidence for the implemented image tests. Measured on the 32-carrier corpus above: scattered detection was 25.0% at 10% capacity and 34.4% at 50% capacity, versus 87.5% at every rate for sequential placement.
 - A high score is an indicator, not proof. Clean files can contain random-looking data, large metadata, compressed content, unusual extensions, or invisible Unicode for legitimate reasons.
 - A low score is not assurance. Novel, adaptive, encrypted, sparse, transform-domain, or format-specific techniques can evade these checks.
 - The scanner does not execute recovered files, identify malware families, inspect memory, or replace an antivirus, EDR, forensic workflow, or human review.
@@ -275,8 +293,10 @@ Scheduling jitter, TCP buffering, and operating-system load can affect the demon
 - Zero-width text can be destroyed by Unicode normalization, editors, chat platforms, copy/paste, fonts, or transport transformations.
 - The scanner fully loads files only up to its configured deep-analysis limit (64 MiB) and UTF-8 text only up to its text-analysis limit (8 MiB). Larger files still receive safe basic checks but not every deep heuristic.
 - Statistical tests are sensitive to source content, resizing, color processing, compression history, and sample size.
+- **Dithered, noisy, or sensor-like imagery can equalize adjacent value pairs naturally.** The chi-square equalized-prefix sweep can therefore raise clean but noisy images to SUSPICIOUS on its own; on the 32-carrier corpus the clean false-positive rate was 21.9% overall: 20% for photographs, 0% for synthetic graphics, and 50% for noisy or pure-noise images. Treat a sweep hit on noisy imagery as a prompt for review, not as evidence of hidden data.
+- **Flat-color or posterized graphics with very few distinct values are statistically blind spots.** With too few active value pairs the chi-square test is skipped, and LSB balance alone scores 18, below the SUSPICIOUS threshold; measured example: 4 solid or banded synthetic carriers went undetected at every embedding rate in both placement modes.
 - Cleaning neutralizes only supported channels. It cannot prove removal of arbitrary steganography, malicious macros, parser exploits, encryption, or external references.
-- The password-scattered image permutation obscures placement; it is not a substitute for AES-GCM encryption.
+- The password-scattered image permutation obscures placement; it is not a substitute for AES-GCM encryption. Below full capacity it largely defeats the implemented statistical tests: at 10% scattered capacity only photographs with naturally balanced pairs were flagged, and several of those flags match the clean false-positive baseline rather than genuine payload detection.
 
 ## Assumptions
 
@@ -381,12 +401,14 @@ This inventory lists project classes and their public project-facing methods. Re
 - `PayloadType` — `identify`, `displayName`.
 - `Entropy` — `shannonBitsPerByte`.
 - `ChiSquareResult(statistic, degreesOfFreedom, zScore)` — record component accessors.
+- `ChiSquareSweep(channelIndex, channelName, channelSamples, equalizedSamples, equalizedFraction, zScore)` — record component accessors.
 - `LsbStatistics(totalBits, oneBits, balanceZ, blockCount, balancedBlockCount, meanOneFraction, oneFractionVariance)` — record component accessors, `oneFraction`, `balancedBlockFraction`.
-- `ImageStatistics` — `pairOfValuesChiSquare`, `lsbStatistics`, `balanceZ`.
+- `ImageStatistics` — `pairOfValuesChiSquare`, `pairOfValuesPrefixSweep`, `lsbStatistics`, `balanceZ`.
 - `LsbHeatmap` — `fromImage`; nested `Heatmap(imageWidth, imageHeight, blockSize, columns, rows, intensities)` accessors and `intensityAt`.
-- `LsbHeatmapCanvas` — constructor, `setHeatmap`, `heatmap`, `paint`, `update`.
+- `LsbHeatmapCanvas` — constructor, `setHeatmap`, `setImageAndHeatmap`, `image`, `heatmap`, `paint`, `update`.
 - `ScanReport` — `file`, `fileSize`, `detectedSignature`, `riskScore`, `riskLevel`, `findings`, `scannedAt`, `toText`, `failure`.
 - `StegoScanner` — `scan`.
+- `PayloadClassifier` — `classifyBlind`, `classifyAuthenticated`; verdict constants `VERDICT_*` and `BLIND_MODE_NOTE`; nested `Mode.displayName`; nested `Classification(mode, byteCount, structuralType, contentVerdict, matchedIndicators, entropyBitsPerByte, evidence, note)` accessors and `toText`.
 - `ReportExporter` — `export`, `exportBatch`.
 - `BatchScanner` — constructors, `scanFolder`, `scanAsync`; nested `Listener.onFileScanned`, `onComplete`, `onFailure`.
 - `ExtractionAttempt` — `success`, `failure`, `successful`, `technique`, `payloadType`, `payload`, `message`.
@@ -412,14 +434,15 @@ This inventory lists project classes and their public project-facing methods. Re
 - `EvaluationMetrics` — `scenario`, `total`, `flagged`, `flaggedPercent`, `formattedPercent`.
 - `EvaluationResult` — `metrics`, `warnings`, `outputDirectory`, `reportFile`, `completedAt`, `overallDetectionPercent`, `falsePositivePercent`, `toTable`.
 - `EvaluationRunner` — constructors, `run`, `main`.
-- `ImagePreviewCanvas` — constructor, `setImages`, `clear`, `paint`, `update`.
+- `ImagePreviewCanvas` — constructors `ImagePreviewCanvas()`, `ImagePreviewCanvas(String, String, String)`; `setImages`, `clear`, `paint`, `update`.
+- `RiskBadge` — constructor, `setLevel`, `level`, `paint`, `update`.
 - `MainFrame` — constructor, `main`.
 - `StegoShieldSelfTest` — `main`.
 
 ## Final quality gate
 
 - This tool is for privacy and defensive security on files you own or are authorized to analyze.
-- No detection-accuracy figures are claimed here because no evaluation corpus has been run in this environment.
+- Detection-accuracy figures quoted in this README come only from evaluation runs executed against the described 32-carrier corpus; they are environmental measurements, not guarantees, and should be re-measured for your own carriers.
 - The exact commands to compile and run are:
 
 ```bash

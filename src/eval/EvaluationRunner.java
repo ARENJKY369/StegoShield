@@ -25,27 +25,50 @@ import java.util.stream.Stream;
  * Generates an on-disk evaluation corpus from a folder of clean PNG/BMP images,
  * runs the live scanner over each generated specimen, and saves measured
  * detection and false-positive rates. It never supplies fabricated outcomes.
+ * LSB payloads are placed sequentially by default, or password-scattered with
+ * a fixed public evaluation password when requested; the scanner never learns
+ * the password or the placement mode.
  */
 public final class EvaluationRunner {
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final int[] LSB_PERCENTAGES = {10, 25, 50, 100};
+    /**
+     * Fixed password used only to place payload bits in scattered mode. It is
+     * public knowledge by design: a real scanner never receives the password,
+     * so measuring detection must not either. Changing it changes scattered
+     * bit positions and therefore measured rates.
+     */
+    private static final String SCATTERED_EVAL_PASSWORD = "stegoshield-eval-scattered-v1";
 
     private final StegoScanner scanner;
+    private final boolean scattered;
 
     /**
-     * Creates an evaluation runner with a default scanner.
+     * Creates an evaluation runner with a default scanner and sequential placement.
      */
     public EvaluationRunner() {
-        this(new StegoScanner());
+        this(new StegoScanner(), false);
     }
 
     /**
-     * Creates an evaluation runner with a supplied scanner.
+     * Creates an evaluation runner with a supplied scanner and sequential placement.
      *
      * @param scanner scanner used for all measured outcomes
      */
     public EvaluationRunner(StegoScanner scanner) {
+        this(scanner, false);
+    }
+
+    /**
+     * Creates an evaluation runner with a supplied scanner and placement mode.
+     *
+     * @param scanner scanner used for all measured outcomes
+     * @param scattered whether LSB payloads are placed password-scattered with
+     *        the fixed evaluation password, which is never given to the scanner
+     */
+    public EvaluationRunner(StegoScanner scanner, boolean scattered) {
         this.scanner = Objects.requireNonNull(scanner, "scanner must not be null");
+        this.scattered = scattered;
     }
 
     /**
@@ -85,7 +108,8 @@ public final class EvaluationRunner {
         }
         Map<EvaluationScenario, EvaluationMetrics> metrics = freezeMetrics(counters);
         File reportFile = new File(runDirectory, "evaluation-results.txt");
-        EvaluationResult result = new EvaluationResult(metrics, warnings, runDirectory, reportFile, Instant.now());
+        EvaluationResult result = new EvaluationResult(metrics, warnings, runDirectory, reportFile, Instant.now(),
+                scattered);
         Files.writeString(reportFile.toPath(), result.toTable(), StandardCharsets.UTF_8);
         System.out.print(result.toTable());
         return result;
@@ -94,17 +118,27 @@ public final class EvaluationRunner {
     /**
      * Command-line entry point for offline runtime evaluation.
      *
-     * @param arguments {@code <clean-image-folder> [output-root]}
+     * @param arguments {@code <clean-image-folder> [output-root] [sequential|scattered]}
      */
     public static void main(String[] arguments) {
-        if (arguments.length < 1 || arguments.length > 2) {
-            System.err.println("Usage: java -cp out eval.EvaluationRunner <clean-image-folder> [output-root]");
+        if (arguments.length < 1 || arguments.length > 3) {
+            System.err.println("Usage: java -cp out eval.EvaluationRunner <clean-image-folder>"
+                    + " [output-root] [sequential|scattered]");
             return;
         }
         File input = new File(arguments[0]);
-        File output = arguments.length == 2 ? new File(arguments[1]) : new File("stegoshield-evaluation-output");
+        File output = arguments.length >= 2 ? new File(arguments[1]) : new File("stegoshield-evaluation-output");
+        boolean scattered = false;
+        if (arguments.length == 3) {
+            String mode = arguments[2].toLowerCase(java.util.Locale.ROOT);
+            if (!mode.equals("sequential") && !mode.equals("scattered")) {
+                System.err.println("Unknown placement mode: " + arguments[2] + " (expected sequential or scattered)");
+                return;
+            }
+            scattered = mode.equals("scattered");
+        }
         try {
-            EvaluationResult result = new EvaluationRunner().run(input, output);
+            EvaluationResult result = new EvaluationRunner(new StegoScanner(), scattered).run(input, output);
             System.out.println("Saved measured evaluation report to: " + result.reportFile().getAbsolutePath());
         } catch (IOException | IllegalArgumentException exception) {
             System.err.println("Evaluation failed: " + safeMessage(exception));
@@ -113,7 +147,9 @@ public final class EvaluationRunner {
 
     private void generateLsbCases(BufferedImage carrier, String prefix, File runDirectory,
             Map<EvaluationScenario, Counter> counters, List<String> warnings) {
-        try (LSBImageStego stego = LSBImageStego.sequential()) {
+        try (LSBImageStego stego = scattered
+                ? LSBImageStego.passwordScattered(SCATTERED_EVAL_PASSWORD.toCharArray())
+                : LSBImageStego.sequential()) {
             long capacity = stego.capacityBytes(carrier);
             for (int percentage : LSB_PERCENTAGES) {
                 EvaluationScenario scenario = scenarioForPercentage(percentage);

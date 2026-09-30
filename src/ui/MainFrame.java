@@ -7,7 +7,9 @@ import analysis.ExtractionService;
 import analysis.FileSignature;
 import analysis.LsbHeatmap;
 import analysis.LsbHeatmapCanvas;
+import analysis.PayloadClassifier;
 import analysis.ReportExporter;
+import analysis.RiskLevel;
 import analysis.ScanReport;
 import analysis.StegoScanner;
 import audio.LSBAudioStego;
@@ -75,6 +77,8 @@ public final class MainFrame extends Frame {
     private static final String EXTRACT_CARD = "extract";
     private static final String SCAN_CARD = "scan";
     private static final String CLEAN_CARD = "clean";
+    private static final String EXTRACTION_CLASSIFICATION_PLACEHOLDER =
+            "Payload classification appears after a successful, authenticated extraction.";
 
     private final CardLayout cards;
     private final Panel cardPanel;
@@ -100,17 +104,27 @@ public final class MainFrame extends Frame {
     private TextField extractSourceField;
     private TextField extractPassword;
     private TextArea extractResult;
+    private TextArea extractClassificationArea;
     private File extractSource;
 
     private TextField scanSourceField;
     private TextArea scanReportArea;
+    private TextArea scanClassificationArea;
     private Label riskLabel;
+    private RiskBadge riskBadge;
     private LsbHeatmapCanvas heatmapCanvas;
+    private ImagePreviewCanvas scanPreviewCanvas;
     private transient ScanReport latestReport;
     private transient List<ScanReport> latestBatch;
+    /** Last image pair generated on the Hide screen, for Scan-screen comparison. */
+    private transient GeneratedCarrier lastGenerated;
 
     private TextField cleanSourceField;
     private TextArea cleanResultArea;
+    private Label cleanRiskBeforeLabel;
+    private Label cleanRiskAfterLabel;
+    private RiskBadge cleanRiskBeforeBadge;
+    private RiskBadge cleanRiskAfterBadge;
     private File cleanSource;
 
     /**
@@ -266,10 +280,20 @@ public final class MainFrame extends Frame {
         controls.add(new Label("Reveal mode"));
         controls.add(extractMode);
         screen.add(controls, BorderLayout.NORTH);
-        extractResult = new TextArea("Extracted plaintext appears here after authentication succeeds.", 16, 90,
+        Panel center = new Panel(new BorderLayout(6, 6));
+        extractResult = new TextArea("Extracted plaintext appears here after authentication succeeds.", 13, 90,
                 TextArea.SCROLLBARS_BOTH);
         extractResult.setEditable(false);
-        screen.add(extractResult, BorderLayout.CENTER);
+        center.add(extractResult, BorderLayout.CENTER);
+        Panel classificationPanel = new Panel(new BorderLayout(0, 4));
+        classificationPanel.add(new Label("Payload Classification", Label.CENTER), BorderLayout.NORTH);
+        extractClassificationArea = new TextArea(
+                EXTRACTION_CLASSIFICATION_PLACEHOLDER, 10, 90,
+                TextArea.SCROLLBARS_BOTH);
+        extractClassificationArea.setEditable(false);
+        classificationPanel.add(extractClassificationArea, BorderLayout.CENTER);
+        center.add(classificationPanel, BorderLayout.SOUTH);
+        screen.add(center, BorderLayout.CENTER);
         Panel actions = new Panel();
         actions.add(navigationButton("Open carrier", this::chooseExtractCarrier));
         actions.add(navigationButton("Extract", this::beginExtract));
@@ -283,17 +307,42 @@ public final class MainFrame extends Frame {
         scanSourceField = lockedField();
         riskLabel = new Label("Risk: no file scanned", Label.CENTER);
         riskLabel.setBackground(Color.LIGHT_GRAY);
+        riskBadge = new RiskBadge();
+        Panel riskPanel = new Panel(new BorderLayout(8, 0));
+        riskPanel.add(riskLabel, BorderLayout.CENTER);
+        riskPanel.add(riskBadge, BorderLayout.EAST);
         top.add(new Label("File to scan"));
         top.add(scanSourceField);
         top.add(new Label("Explainable risk"));
-        top.add(riskLabel);
+        top.add(riskPanel);
         screen.add(top, BorderLayout.NORTH);
-        Panel center = new Panel(new GridLayout(1, 2, 6, 6));
-        scanReportArea = new TextArea("Scanner findings appear here.", 18, 56, TextArea.SCROLLBARS_BOTH);
+        Panel center = new Panel(new BorderLayout(6, 6));
+        Panel reportColumn = new Panel(new BorderLayout(0, 4));
+        scanReportArea = new TextArea("Scanner findings appear here.", 18, 46, TextArea.SCROLLBARS_BOTH);
         scanReportArea.setEditable(false);
-        center.add(scanReportArea);
+        reportColumn.add(scanReportArea, BorderLayout.CENTER);
+        Panel classificationPanel = new Panel(new BorderLayout(0, 4));
+        classificationPanel.add(new Label("Payload Classification (blind, no password)", Label.CENTER),
+                BorderLayout.NORTH);
+        scanClassificationArea = new TextArea(
+                "Blind structural classification of recoverable payload bytes appears here after a scan.",
+                9, 46, TextArea.SCROLLBARS_BOTH);
+        scanClassificationArea.setEditable(false);
+        classificationPanel.add(scanClassificationArea, BorderLayout.CENTER);
+        reportColumn.add(classificationPanel, BorderLayout.SOUTH);
+        center.add(reportColumn, BorderLayout.WEST);
+        Panel visuals = new Panel(new GridLayout(2, 1, 6, 6));
+        Panel heatPanel = new Panel(new BorderLayout(0, 4));
+        heatPanel.add(new Label("LSB heatmap overlay on scanned image", Label.CENTER), BorderLayout.NORTH);
         heatmapCanvas = new LsbHeatmapCanvas();
-        center.add(heatmapCanvas);
+        heatPanel.add(heatmapCanvas, BorderLayout.CENTER);
+        visuals.add(heatPanel);
+        Panel previewPanel = new Panel(new BorderLayout(0, 4));
+        previewPanel.add(new Label("Original / scanned / amplified difference", Label.CENTER), BorderLayout.NORTH);
+        scanPreviewCanvas = new ImagePreviewCanvas("ORIGINAL", "SCANNED IMAGE", "DIFFERENCE x20");
+        previewPanel.add(scanPreviewCanvas, BorderLayout.CENTER);
+        visuals.add(previewPanel);
+        center.add(visuals, BorderLayout.CENTER);
         screen.add(center, BorderLayout.CENTER);
         Panel actions = new Panel();
         actions.add(navigationButton("Open file", this::chooseScanFile));
@@ -309,10 +358,26 @@ public final class MainFrame extends Frame {
         Panel screen = new Panel(new BorderLayout(6, 6));
         Panel top = new Panel(new GridLayout(0, 2, 6, 6));
         cleanSourceField = lockedField();
+        cleanRiskBeforeLabel = new Label("Risk: not cleaned yet", Label.CENTER);
+        cleanRiskBeforeLabel.setBackground(Color.LIGHT_GRAY);
+        cleanRiskBeforeBadge = new RiskBadge();
+        Panel beforePanel = new Panel(new BorderLayout(8, 0));
+        beforePanel.add(cleanRiskBeforeLabel, BorderLayout.CENTER);
+        beforePanel.add(cleanRiskBeforeBadge, BorderLayout.EAST);
+        cleanRiskAfterLabel = new Label("Risk: not cleaned yet", Label.CENTER);
+        cleanRiskAfterLabel.setBackground(Color.LIGHT_GRAY);
+        cleanRiskAfterBadge = new RiskBadge();
+        Panel afterPanel = new Panel(new BorderLayout(8, 0));
+        afterPanel.add(cleanRiskAfterLabel, BorderLayout.CENTER);
+        afterPanel.add(cleanRiskAfterBadge, BorderLayout.EAST);
         top.add(new Label("File to sanitize"));
         top.add(cleanSourceField);
         top.add(new Label("Guarantee"));
         top.add(new Label("A distinct output is required; originals are never modified."));
+        top.add(new Label("Risk before cleaning"));
+        top.add(beforePanel);
+        top.add(new Label("Risk after cleaning"));
+        top.add(afterPanel);
         screen.add(top, BorderLayout.NORTH);
         cleanResultArea = new TextArea("Cleaning will display source and output scores here.", 16, 90,
                 TextArea.SCROLLBARS_BOTH);
@@ -426,6 +491,9 @@ public final class MainFrame extends Frame {
                     if (hidden.original != null) {
                         previewCanvas.setImages(hidden.original, hidden.generated);
                     }
+                    if (hidden.original != null && hidden.generated != null) {
+                        lastGenerated = new GeneratedCarrier(hidden.output, hidden.original, hidden.generated);
+                    }
                 });
             } finally {
                 clear(payload);
@@ -453,6 +521,7 @@ public final class MainFrame extends Frame {
         char[] password = extractPassword.getText().toCharArray();
         int mode = extractMode.getSelectedIndex();
         boolean scattered = extractPlacement.getSelectedIndex() == 1;
+        onEdt(() -> extractClassificationArea.setText(EXTRACTION_CLASSIFICATION_PLACEHOLDER));
         runAsync("extract", () -> {
             try {
                 byte[] raw = extractRawPayload(source, scattered, password);
@@ -469,9 +538,13 @@ public final class MainFrame extends Frame {
                         clear(decrypted);
                     }
                 }
-                String plaintext = decodeUtf8(message);
+                PayloadClassifier.Classification classification = PayloadClassifier.classifyAuthenticated(message);
+                String plaintext = displayText(message);
                 clear(message);
-                onEdt(() -> extractResult.setText(plaintext));
+                onEdt(() -> {
+                    extractResult.setText(plaintext);
+                    extractClassificationArea.setText(classification.toText());
+                });
                 appendStatus("Extraction and authenticated validation succeeded for " + source.getName() + ".");
             } catch (AEADBadTagException exception) {
                 appendStatus("Extraction failed: wrong password or tampered encrypted data.");
@@ -497,13 +570,17 @@ public final class MainFrame extends Frame {
         File source = new File(selectedPath);
         runAsync("scan", () -> {
             ScanReport report = scanner.scan(source);
-            LsbHeatmap.Heatmap heatmap = buildHeatmap(source);
+            ScanVisual visual = buildScanVisual(source);
+            GeneratedCarrier pair = lastGenerated;
+            PayloadClassifier.Classification payloadClassification = classifyRecoveredPayload(source, pair);
             latestReport = report;
             latestBatch = List.of();
             onEdt(() -> {
                 scanReportArea.setText(report.toText());
                 setRiskLabel(report);
-                heatmapCanvas.setHeatmap(heatmap);
+                heatmapCanvas.setImageAndHeatmap(visual.image(), visual.heatmap());
+                showScanPreview(pair, source, visual);
+                scanClassificationArea.setText(payloadClassification.toText());
             });
             appendStatus("Completed scan: " + source.getName() + " scored " + report.riskScore() + "/100.");
         });
@@ -635,7 +712,7 @@ public final class MainFrame extends Frame {
                 cleanResultArea.setText("Strategy: " + result.strategy() + "\n\nBefore:\n"
                         + result.before().toText() + "\nAfter:\n" + result.after().toText()
                         + "\nScore reduction: " + result.scoreReduction());
-                setRiskLabel(result.after());
+                setCleanRisk(result.before(), result.after());
             });
             appendStatus("Sanitized copy saved to " + result.output().getAbsolutePath() + "; score change: "
                     + result.scoreReduction());
@@ -764,12 +841,68 @@ public final class MainFrame extends Frame {
         return new ZeroWidthStego().extract(text);
     }
 
-    private LsbHeatmap.Heatmap buildHeatmap(File source) {
+    private ScanVisual buildScanVisual(File source) {
         try {
             BufferedImage image = LSBImageStego.readCarrier(source);
-            return LsbHeatmap.fromImage(image, AnalysisConstants.IMAGE_LSB_BLOCK_SIZE);
+            return new ScanVisual(image, LsbHeatmap.fromImage(image, AnalysisConstants.IMAGE_LSB_BLOCK_SIZE));
         } catch (IOException | IllegalArgumentException exception) {
-            return null;
+            return new ScanVisual(null, null);
+        }
+    }
+
+    /**
+     * Shows the scanned image in the Scan screen preview panels. When the
+     * scanned file is the stego image most recently generated on the Hide
+     * screen, its original carrier and amplified difference are shown as
+     * well, giving the full ORIGINAL / SCANNED / DIFFERENCE comparison.
+     */
+    private void showScanPreview(GeneratedCarrier pair, File source, ScanVisual visual) {
+        BufferedImage scanned = visual.image();
+        if (scanned == null) {
+            scanPreviewCanvas.clear();
+            return;
+        }
+        boolean pairedWithSessionOutput = pair != null && pair.original() != null
+                && pair.generated() != null
+                && pair.output().getAbsolutePath().equals(source.getAbsolutePath());
+        if (pairedWithSessionOutput) {
+            scanPreviewCanvas.setImages(pair.original(), pair.generated());
+        } else {
+            scanPreviewCanvas.setImages(null, scanned);
+        }
+    }
+
+    /**
+     * Runs the blind payload classification (Mode 1) on the bytes a
+     * best-effort extraction recovers from the scanned file. Bytes are
+     * reported by structural type only and are never labelled malware. When
+     * the scanned file is the stego image this session generated on the Hide
+     * screen, its embedded bytes are flagged as this app's own AES-GCM
+     * container and skipped.
+     */
+    private PayloadClassifier.Classification classifyRecoveredPayload(File source, GeneratedCarrier pair) {
+        boolean ownEncryptedPayload = pair != null
+                && pair.output().getAbsolutePath().equals(source.getAbsolutePath());
+        byte[] recovered = null;
+        ExtractionAttempt attempt = extractionService.attempt(source);
+        if (attempt.successful()) {
+            recovered = attempt.payload();
+        }
+        return PayloadClassifier.classifyBlind(recovered, ownEncryptedPayload);
+    }
+
+    /**
+     * Returns the UTF-8 rendering of an authenticated payload, or a neutral
+     * placeholder when the recovered plaintext is binary, so successful
+     * extraction of non-text payloads is reported rather than mislabelled as
+     * a failure.
+     */
+    private static String displayText(byte[] message) {
+        try {
+            return decodeUtf8(message);
+        } catch (IllegalArgumentException exception) {
+            return "(Authenticated payload of " + message.length
+                    + " byte(s) is not valid UTF-8 text; see Payload Classification below.)";
         }
     }
 
@@ -792,11 +925,25 @@ public final class MainFrame extends Frame {
 
     private void setRiskLabel(ScanReport report) {
         riskLabel.setText("Risk: " + report.riskScore() + "/100 — " + report.riskLevel().displayName());
-        riskLabel.setBackground(switch (report.riskLevel()) {
+        riskLabel.setBackground(riskLabelColor(report.riskLevel()));
+        riskBadge.setLevel(report.riskLevel());
+    }
+
+    private void setCleanRisk(ScanReport before, ScanReport after) {
+        cleanRiskBeforeLabel.setText("Risk: " + before.riskScore() + "/100 — " + before.riskLevel().displayName());
+        cleanRiskBeforeLabel.setBackground(riskLabelColor(before.riskLevel()));
+        cleanRiskBeforeBadge.setLevel(before.riskLevel());
+        cleanRiskAfterLabel.setText("Risk: " + after.riskScore() + "/100 — " + after.riskLevel().displayName());
+        cleanRiskAfterLabel.setBackground(riskLabelColor(after.riskLevel()));
+        cleanRiskAfterBadge.setLevel(after.riskLevel());
+    }
+
+    private static Color riskLabelColor(RiskLevel level) {
+        return switch (level) {
             case CLEAN -> new Color(132, 205, 132);
             case SUSPICIOUS -> new Color(255, 200, 95);
             case LIKELY_CONTAINS_HIDDEN_DATA -> new Color(236, 122, 122);
-        });
+        };
     }
 
     private File chooseFile(String title, int mode, String defaultName) {
@@ -907,15 +1054,14 @@ public final class MainFrame extends Frame {
     private record CapacityPreview(long capacity, BufferedImage image) {
     }
 
-    private record HiddenOutput(File output, BufferedImage original, BufferedImage generated, String metrics) {
+    private record ScanVisual(BufferedImage image, LsbHeatmap.Heatmap heatmap) {
     }
 
-    @FunctionalInterface
-    private interface BackgroundTask {
-        void run() throws Exception;
+    private record GeneratedCarrier(File output, BufferedImage original, BufferedImage generated) {
     }
-}
-  }
+
+    private record HiddenOutput(File output, BufferedImage original, BufferedImage generated, String metrics) {
+    }
 
     @FunctionalInterface
     private interface BackgroundTask {

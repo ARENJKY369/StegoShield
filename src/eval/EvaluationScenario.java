@@ -37,4 +37,23 @@ public enum EvaluationScenario {
     public String displayName() {
         return displayName;
     }
+
+    /**
+     * Returns the user-facing scenario name for an embedding placement mode.
+     *
+     * @param scattered whether LSB payloads were placed password-scattered
+     * @return user-facing scenario name
+     */
+    public String displayName(boolean scattered) {
+        if (!scattered) {
+            return displayName;
+        }
+        return switch (this) {
+            case LSB_10_PERCENT -> "Scattered LSB at 10% capacity";
+            case LSB_25_PERCENT -> "Scattered LSB at 25% capacity";
+            case LSB_50_PERCENT -> "Scattered LSB at 50% capacity";
+            case LSB_100_PERCENT -> "Scattered LSB at 100% capacity";
+            default -> displayName;
+        };
+    }
 }

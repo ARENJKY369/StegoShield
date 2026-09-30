@@ -158,7 +158,7 @@ public final class ScanReport {
         }
 
         ScanReport build() {
-            if (findings.isEmpty()) {
+            if (findings.isEmpty() || findings.stream().noneMatch(finding -> finding.points() > 0)) {
                 findings.add(new Finding("Heuristic summary", 0,
                         "No implemented steganography indicators were triggered."));
             }

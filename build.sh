@@ -21,8 +21,12 @@ case "$MODE" in
         shift
         exec java -cp out eval.EvaluationRunner "$@"
         ;;
+    verify-features)
+        shift
+        exec java -cp out demo.FeatureVerification "$@"
+        ;;
     *)
-        printf '%s\n' "Usage: ./build.sh [build|run|test|eval <clean-image-folder> [output-root]]" >&2
+        printf '%s\n' "Usage: ./build.sh [build|run|test|verify-features [samples-folder]|eval <clean-image-folder> [output-root]]" >&2
         exit 2
         ;;
 esac

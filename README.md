@@ -146,6 +146,22 @@ The script invokes `javac -Xlint:all` before its selected action.
 java -cp out test.StegoShieldSelfTest
 ```
 
+### Deterministic sample and session-report verification
+
+After installing JDK 17+, generate all five samples, print the sorted risk table,
+authenticate/classify the script sample with `demo1234`, export its session report,
+and print the exact report contents with:
+
+```bash
+./build.sh verify-features
+```
+
+An optional destination can be supplied:
+
+```bash
+./build.sh verify-features /path/to/samples
+```
+
 ### Evaluation command
 
 ```bash
@@ -185,7 +201,9 @@ A standard extraction decrypts with AES-GCM, validates `Payload`, then strictly 
 3. For images, inspect the block-based LSB heatmap painted as a semi-transparent colour overlay on the scanned picture, warm and opaque marking near-even blocks. The preview panels below it show the scanned image, and — when the scanned file is the stego image most recently generated on the Hide screen in this session — its original carrier and amplified x20 difference too.
 4. The **Payload Classification** panel below the risk report shows the blind structural type of any payload bytes a best-effort extraction recovers, with the note: full content classification requires extraction with the correct password. No malware claim is made.
 5. Use **Batch folder** and select any file within the target folder; its parent folder is scanned recursively in a background worker.
-6. Use **Export report** to save a UTF-8 `.txt` single or batch report.
+6. Use **Export Session Report** to write a traceable UTF-8 report beside the scanned file. It includes the scan metadata and findings, the most recent blind or authenticated payload classification for that file, app version, and Git commit. Existing reports are never overwritten (`-report-2.txt`, etc. is used).
+7. Use **Export batch/manual report** when you want the existing save dialog or a full batch report.
+8. Use **Load Sample Files** to regenerate the five deterministic demo files in `samples/`. The password is shown in the UI: `demo1234`.
 
 The **Timing demo** is a localhost-only controlled demonstration. It intentionally takes time because it encodes bits using 50 ms and 150 ms gaps.
 

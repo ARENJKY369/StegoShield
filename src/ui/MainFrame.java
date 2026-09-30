@@ -17,6 +17,7 @@ import audio.WavData;
 import core.Payload;
 import crypto.CryptoUtil;
 import decoy.DecoyMode;
+import demo.SampleFileGenerator;
 import eof.PngEofStego;
 import eof.PngMetadataStego;
 import eof.PngUtil;
@@ -56,7 +57,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.security.GeneralSecurityException;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -117,6 +120,10 @@ public final class MainFrame extends Frame {
     private ImagePreviewCanvas scanPreviewCanvas;
     private transient ScanReport latestReport;
     private transient List<ScanReport> latestBatch;
+    /** Most recent blind or authenticated classification keyed by canonical file path. */
+    private final transient Map<String, PayloadClassifier.Classification> sessionClassifications;
+    /** Scan reports retained by file so Extract can export the matching session result. */
+    private final transient Map<String, ScanReport> sessionReports;
     /** Last image pair generated on the Hide screen, for Scan-screen comparison. */
     private transient GeneratedCarrier lastGenerated;
 
@@ -137,6 +144,8 @@ public final class MainFrame extends Frame {
         cleaner = new StegoCleaner(scanner);
         extractionService = new ExtractionService();
         latestBatch = List.of();
+        sessionClassifications = new HashMap<>();
+        sessionReports = new HashMap<>();
 
         setLayout(new BorderLayout(6, 6));
         add(buildNavigation(), BorderLayout.NORTH);
@@ -303,6 +312,8 @@ public final class MainFrame extends Frame {
         Panel actions = new Panel();
         actions.add(navigationButton("Open carrier", this::chooseExtractCarrier));
         actions.add(navigationButton("Extract", this::beginExtract));
+        actions.add(navigationButton("Export Session Report",
+                () -> beginSessionReportExport(extractSource)));
         screen.add(actions, BorderLayout.SOUTH);
         return screen;
     }
@@ -355,7 +366,11 @@ public final class MainFrame extends Frame {
         actions.add(navigationButton("Scan file", this::beginScan));
         actions.add(navigationButton("Batch folder", this::beginBatchScan));
         actions.add(navigationButton("Timing demo", this::beginTimingDemo));
-        actions.add(navigationButton("Export report", this::beginReportExport));
+        actions.add(navigationButton("Export Session Report",
+                () -> beginSessionReportExport(null)));
+        actions.add(navigationButton("Export batch/manual report", this::beginReportExport));
+        actions.add(navigationButton("Load Sample Files", this::beginLoadSamples));
+        actions.add(new Label("Password for sample files: " + SampleFileGenerator.DEMO_PASSWORD));
         screen.add(actions, BorderLayout.SOUTH);
         return screen;
     }
@@ -392,6 +407,8 @@ public final class MainFrame extends Frame {
         Panel actions = new Panel();
         actions.add(navigationButton("Open file", this::chooseCleanFile));
         actions.add(navigationButton("Clean and re-scan", this::beginClean));
+        actions.add(navigationButton("Export Session Report",
+                () -> beginSessionReportExport(null)));
         screen.add(actions, BorderLayout.SOUTH);
         return screen;
     }
@@ -550,6 +567,9 @@ public final class MainFrame extends Frame {
                     }
                 }
                 PayloadClassifier.Classification classification = PayloadClassifier.classifyAuthenticated(message);
+                synchronized (sessionClassifications) {
+                    sessionClassifications.put(sessionKey(source), classification);
+                }
                 String plaintext = displayText(message);
                 onEdt(() -> {
                     extractResult.setText(plaintext);
@@ -594,6 +614,10 @@ public final class MainFrame extends Frame {
             PayloadClassifier.Classification payloadClassification = classifyRecoveredPayload(source, pair);
             latestReport = report;
             latestBatch = List.of();
+            synchronized (sessionClassifications) {
+                sessionClassifications.put(sessionKey(source), payloadClassification);
+                sessionReports.put(sessionKey(source), report);
+            }
             onEdt(() -> {
                 scanReportArea.setText(report.toText());
                 setRiskLabel(report);
@@ -627,14 +651,20 @@ public final class MainFrame extends Frame {
             @Override
             public void onComplete(List<ScanReport> reports) {
                 latestBatch = reports;
+                latestReport = reports.isEmpty() ? null : reports.get(0);
+                synchronized (sessionClassifications) {
+                    for (ScanReport report : reports) {
+                        sessionReports.put(sessionKey(report.file()), report);
+                    }
+                }
                 onEdt(() -> {
-                    scanReportArea.append("\nBatch complete: " + reports.size()
-                            + " file(s), sorted by descending risk.\n");
+                    scanReportArea.setText(batchRiskTable(reports));
                     if (!reports.isEmpty()) {
                         setRiskLabel(reports.get(0));
                     }
                 });
-                appendStatus("Batch scan completed with " + reports.size() + " report(s).");
+                appendStatus("Batch scan completed with " + reports.size()
+                        + " report(s), sorted by descending risk.");
             }
 
             @Override
@@ -685,6 +715,42 @@ public final class MainFrame extends Frame {
         });
     }
 
+    private void beginSessionReportExport(File preferredFile) {
+        ScanReport report = latestReport;
+        if (preferredFile != null) {
+            synchronized (sessionClassifications) {
+                report = sessionReports.get(sessionKey(preferredFile));
+            }
+        }
+        if (report == null) {
+            appendStatus("Run a scan for this file or a clean re-scan before exporting a session report.");
+            return;
+        }
+        ScanReport selectedReport = report;
+        PayloadClassifier.Classification classification;
+        synchronized (sessionClassifications) {
+            classification = sessionClassifications.get(sessionKey(selectedReport.file()));
+        }
+        runAsync("session report export", () -> {
+            File written = ReportExporter.exportSession(selectedReport, classification);
+            appendStatus("Saved session report without overwriting existing files: "
+                    + written.getAbsolutePath());
+        });
+    }
+
+    private void beginLoadSamples() {
+        File directory = SampleFileGenerator.defaultDirectory(MainFrame.class);
+        runAsync("sample generation", () -> {
+            List<File> generated = SampleFileGenerator.generate(directory);
+            onEdt(() -> scanSourceField.setText(generated.get(0).getAbsolutePath()));
+            appendStatus("Generated " + generated.size() + " deterministic sample files in "
+                    + directory.getAbsolutePath() + ". Demo password: " + SampleFileGenerator.DEMO_PASSWORD);
+            for (File file : generated) {
+                appendStatus("Sample: " + file.getName());
+            }
+        });
+    }
+
     private void beginReportExport() {
         if (latestReport == null && latestBatch.isEmpty()) {
             appendStatus("Run a scan or batch scan before exporting a report.");
@@ -727,6 +793,14 @@ public final class MainFrame extends Frame {
         }
         runAsync("clean", () -> {
             SanitizationResult result = cleaner.clean(source, output);
+            latestReport = result.after();
+            latestBatch = List.of();
+            PayloadClassifier.Classification cleanedClassification =
+                    classifyRecoveredPayload(result.output(), null);
+            synchronized (sessionClassifications) {
+                sessionClassifications.put(sessionKey(result.output()), cleanedClassification);
+                sessionReports.put(sessionKey(result.output()), result.after());
+            }
             onEdt(() -> {
                 cleanResultArea.setText("Strategy: " + result.strategy() + "\n\nBefore:\n"
                         + result.before().toText() + "\nAfter:\n" + result.after().toText()
@@ -968,6 +1042,26 @@ public final class MainFrame extends Frame {
             case SUSPICIOUS -> new Color(255, 200, 95);
             case LIKELY_CONTAINS_HIDDEN_DATA -> new Color(236, 122, 122);
         };
+    }
+
+    private static String batchRiskTable(List<ScanReport> reports) {
+        StringBuilder table = new StringBuilder("StegoShield batch scan — sorted by descending risk\n\n");
+        table.append(String.format(java.util.Locale.ROOT, "%-34s %8s  %s%n", "File", "Risk", "Label"));
+        table.append("--------------------------------------------------------------------------\n");
+        for (ScanReport report : reports) {
+            table.append(String.format(java.util.Locale.ROOT, "%-34s %7d/100  %s%n",
+                    report.file().getName(), report.riskScore(), report.riskLevel().displayName()));
+        }
+        table.append("\nFiles scanned: ").append(reports.size()).append('\n');
+        return table.toString();
+    }
+
+    private static String sessionKey(File file) {
+        try {
+            return file.getCanonicalPath();
+        } catch (IOException exception) {
+            return file.getAbsolutePath();
+        }
     }
 
     private File chooseFile(String title, int mode, String defaultName) {

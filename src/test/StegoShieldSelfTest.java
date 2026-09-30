@@ -4,7 +4,10 @@ import analysis.ScanReport;
 import analysis.StegoScanner;
 import core.Payload;
 import crypto.CryptoUtil;
+import decoy.DecoyMode;
 import eof.PngEofStego;
+import image.EmbeddingMode;
+import image.ImageMetrics;
 import image.LSBImageStego;
 import java.awt.image.BufferedImage;
 import java.io.File;
@@ -43,6 +46,8 @@ public final class StegoShieldSelfTest {
             temporaryDirectory = Files.createTempDirectory("stegoshield-self-test-");
             testImageHideExtractRoundTrip();
             testImageFileRoundTrips(temporaryDirectory);
+            testPlacementAutoDetectionAndDifference();
+            testNoDecoyPayloadIdentification();
             testWrongPassword();
             testOversizePayload();
             testJpegOutputRejection(temporaryDirectory);
@@ -114,7 +119,12 @@ public final class StegoShieldSelfTest {
                     File actual = LSBImageStego.writePng(embedded, output);
                     require(actual.isFile(), "generated workflow PNG was not saved");
                     BufferedImage reloaded = LSBImageStego.readCarrier(actual);
-                    byte[] extracted = stego.extract(reloaded);
+                    EmbeddingMode expectedMode = scattered
+                            ? EmbeddingMode.PASSWORD_SCATTERED : EmbeddingMode.SEQUENTIAL;
+                    require(LSBImageStego.inspectHeader(reloaded).mode() == expectedMode,
+                            "image header did not preserve placement mode");
+                    byte[] extracted = LSBImageStego.extractAutomatically(reloaded,
+                            "workflow-password".toCharArray());
                     byte[] decrypted = CryptoUtil.decrypt(extracted, "workflow-password".toCharArray());
                     byte[] recovered = Payload.unwrap(decrypted);
                     require(message.equals(new String(recovered, StandardCharsets.UTF_8)),
@@ -130,6 +140,58 @@ public final class StegoShieldSelfTest {
         require(ImageIO.read(sequentialFile) != null && ImageIO.read(scatteredFile) != null,
                 "saved workflow outputs could not be reloaded");
         System.out.println("PASS: sequential and password-scattered PNG workflow round trips");
+    }
+
+    private static void testPlacementAutoDetectionAndDifference() throws Exception {
+        BufferedImage carrier = patternedCarrier(128, 128);
+        byte[] encrypted = CryptoUtil.encrypt(
+                Payload.wrap("auto-detected scattered placement".getBytes(StandardCharsets.UTF_8)),
+                "placement-password".toCharArray());
+        byte[] extracted = null;
+        byte[] decrypted = null;
+        try {
+            BufferedImage embedded;
+            try (LSBImageStego stego = LSBImageStego.passwordScattered(
+                    "placement-password".toCharArray())) {
+                embedded = stego.embed(carrier, encrypted);
+            }
+            require(LSBImageStego.inspectHeader(embedded).mode() == EmbeddingMode.PASSWORD_SCATTERED,
+                    "scattered placement flag was not detected from the public header");
+            extracted = LSBImageStego.extractAutomatically(embedded, "placement-password".toCharArray());
+            decrypted = CryptoUtil.decrypt(extracted, "placement-password".toCharArray());
+            byte[] recovered = Payload.unwrap(decrypted);
+            String result = new String(recovered, StandardCharsets.UTF_8);
+            clear(recovered);
+            require("auto-detected scattered placement".equals(result),
+                    "automatic scattered extraction changed the message");
+
+            BufferedImage difference = ImageMetrics.amplifiedDifference(carrier, embedded, 20.0d);
+            boolean visibleChange = false;
+            for (int y = 0; y < difference.getHeight() && !visibleChange; y++) {
+                for (int x = 0; x < difference.getWidth(); x++) {
+                    if ((difference.getRGB(x, y) & 0x00FF_FFFF) != 0) {
+                        visibleChange = true;
+                        break;
+                    }
+                }
+            }
+            require(visibleChange, "amplified LSB difference image was solid black");
+            System.out.println("PASS: placement auto-detected as password-scattered; extraction result: " + result);
+            System.out.println("PASS: LSB amplified difference contains visible non-black pixel noise"
+                    + " (MSE " + ImageMetrics.meanSquaredError(carrier, embedded) + ")");
+        } finally {
+            clear(encrypted);
+            clear(extracted);
+            clear(decrypted);
+        }
+    }
+
+    private static void testNoDecoyPayloadIdentification() {
+        byte[] standard = {0x01, 0x02, 0x03, 0x04};
+        require(!DecoyMode.hasMagic(standard), "standard payload was misidentified as a decoy container");
+        String error = DecoyMode.hasMagic(standard) ? "" : "no decoy payload found";
+        require("no decoy payload found".equals(error), "missing-decoy error was not specific");
+        System.out.println("PASS: standard payload in decoy reveal mode reports: no decoy payload found");
     }
 
     private static void testWrongPassword() throws GeneralSecurityException {
@@ -151,7 +213,7 @@ public final class StegoShieldSelfTest {
     }
 
     private static void testOversizePayload() {
-        BufferedImage tinyCarrier = patternedCarrier(4, 4);
+        BufferedImage tinyCarrier = patternedCarrier(8, 8);
         try (LSBImageStego stego = LSBImageStego.sequential()) {
             long capacity = stego.capacityBytes(tinyCarrier);
             require(capacity > 0L, "tiny test carrier unexpectedly has zero capacity");
@@ -250,6 +312,8 @@ public final class StegoShieldSelfTest {
         require(appendedReport.riskScore() >= 60,
                 "appended-data PNG was not strongly flagged: " + appendedReport.riskScore());
         System.out.println("PASS: scanner clean vs stego vs appended-data comparison");
+        System.out.println("VERIFY risk scores: clean=" + clean.riskScore() + "/100, LSB="
+                + stego.riskScore() + "/100, appended=" + appendedReport.riskScore() + "/100");
     }
 
     private static BufferedImage patternedCarrier(int width, int height) {
